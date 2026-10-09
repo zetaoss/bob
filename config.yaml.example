@@ -1,0 +1,30 @@
+server:
+  port: 8080
+  logLevel: info
+
+# Unknown keys are rejected. providers.*.apiKey and proxies values may reference
+# environment variables as ${NAME}; an unset variable is a startup error.
+
+# /aigate: LLM routing with fallback. Omit models to disable the route.
+aigate:
+  validateModelsOnStartup: true
+  fallback:
+    rounds: 2
+    perAttemptTimeout: 30s
+  models:
+    # fallback priority: first model is tried first
+    # format: {provider}/{model}
+    - gemini/gemini-2.5-flash
+    - ollama/gemma4:31b
+  providers:
+    gemini:
+      apiKey: ${GEMINI_API_KEY}
+    ollama:
+      apiKey: ${OLLAMA_API_KEY}
+
+# /<name>/... is forwarded to <url>/... (prefix stripped, query kept).
+proxies:
+  prometheus: http://prometheus:9090
+  runbox: http://runbox
+  search: http://search
+  shellbox-score: http://shellbox-score

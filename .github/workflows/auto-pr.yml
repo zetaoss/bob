@@ -1,0 +1,47 @@
+name: Auto PR
+
+on:
+  push:
+    branches-ignore:
+      - main
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open-pr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create PR if missing
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const head = `${owner}:${context.ref.replace('refs/heads/', '')}`;
+            const base = 'main';
+
+            const existing = await github.rest.pulls.list({
+              owner,
+              repo,
+              state: 'open',
+              head,
+              base
+            });
+
+            if (existing.data.length > 0) {
+              core.info(`PR already exists: #${existing.data[0].number}`);
+              return;
+            }
+
+            const pr = await github.rest.pulls.create({
+              owner,
+              repo,
+              head: context.ref.replace('refs/heads/', ''),
+              base,
+              title: `Auto PR: ${context.ref.replace('refs/heads/', '')}`,
+              body: `Automatically opened from branch \`${context.ref.replace('refs/heads/', '')}\`.`
+            });
+
+            core.info(`Created PR #${pr.data.number}`);
