@@ -25,6 +25,8 @@ type Config struct {
 	AIGate AIGateConfig `yaml:"aigate"`
 	// Search enables /search when at least one engine has credentials.
 	Search SearchConfig `yaml:"search"`
+	// K8s enables /k8s when prometheus is set.
+	K8s K8sConfig `yaml:"k8s"`
 	// Proxies maps a route name to an upstream base URL: /<name>/... is forwarded to <url>/...
 	Proxies map[string]string `yaml:"proxies,omitempty"`
 }
@@ -44,6 +46,20 @@ type AIGateConfig struct {
 // Enabled reports whether /aigate should be served.
 func (c AIGateConfig) Enabled() bool {
 	return len(c.Models) > 0
+}
+
+// K8sConfig selects what /k8s/metrics reports: nodes of one node pool and pods and one PVC of
+// one namespace, read from a Prometheus-compatible query API.
+type K8sConfig struct {
+	Prometheus string `yaml:"prometheus"`
+	Nodepool   string `yaml:"nodepool"`
+	Namespace  string `yaml:"namespace"`
+	PVC        string `yaml:"pvc"`
+}
+
+// Enabled reports whether /k8s should be served.
+func (c K8sConfig) Enabled() bool {
+	return c.Prometheus != ""
 }
 
 // SearchConfig holds search API credentials; an engine is used only when its credentials are set.
@@ -91,7 +107,7 @@ func expandEnv(field, value string) (string, error) {
 // routeName is a single path segment. Reserved names are served by bob itself.
 var routeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-var reservedRoutes = []string{"aigate", "healthz", "search"}
+var reservedRoutes = []string{"aigate", "healthz", "k8s", "search"}
 
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -140,6 +156,16 @@ func LoadConfig(path string) (*Config, error) {
 		*value = expanded
 	}
 
+	if cfg.K8s.Enabled() {
+		u, err := url.Parse(cfg.K8s.Prometheus)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+			return nil, fmt.Errorf("config k8s.prometheus must be an http(s) URL, got %q", cfg.K8s.Prometheus)
+		}
+		if cfg.K8s.Nodepool == "" || cfg.K8s.Namespace == "" || cfg.K8s.PVC == "" {
+			return nil, fmt.Errorf("config k8s requires nodepool, namespace and pvc")
+		}
+	}
+
 	for name, target := range cfg.Proxies {
 		target, err := expandEnv("proxies."+name, target)
 		if err != nil {
@@ -155,8 +181,8 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	if !cfg.AIGate.Enabled() && !cfg.Search.Enabled() && len(cfg.Proxies) == 0 {
-		return nil, fmt.Errorf("config must enable aigate or search, or define at least one proxy")
+	if !cfg.AIGate.Enabled() && !cfg.Search.Enabled() && !cfg.K8s.Enabled() && len(cfg.Proxies) == 0 {
+		return nil, fmt.Errorf("config must enable aigate, search or k8s, or define at least one proxy")
 	}
 	return &cfg, nil
 }

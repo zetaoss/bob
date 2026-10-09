@@ -31,8 +31,15 @@ search:
   googleAPIKey: ${GOOGLE_SEARCH_KEY}        # google_search (Custom Search JSON API)
   googleCX: ${GOOGLE_SEARCH_CX}
 
+# /k8s: resource usage of one node pool, and pods and one PVC of one namespace, plus
+# zeta-defender activity, read from a Prometheus-compatible query API. Omit to disable.
+k8s:
+  prometheus: http://prometheus:9090
+  nodepool: default-pool
+  namespace: default
+  pvc: data
+
 # /<name>/... is forwarded to <url>/... (prefix stripped, query kept).
 proxies:
-  prometheus: http://prometheus:9090
   runbox: http://runbox
   shellbox-score: http://shellbox-score
