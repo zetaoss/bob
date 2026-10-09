@@ -97,6 +97,15 @@ func TestServeHTTP_One(t *testing.T) {
 	if code, _ := get(t, h, "/unknown"); code != http.StatusNotFound {
 		t.Errorf("unknown metric: code=%d", code)
 	}
+
+	code, b = get(t, h, "/?name=pod_count&name=node_cpu_usage&name=pod_count")
+	if code != http.StatusOK || len(b.Result) != 2 || len(b.Result["node_cpu_usage"]) != 2 {
+		t.Errorf("named query: code=%d body=%+v", code, b)
+	}
+	code, b = get(t, h, "/?name=pod_count&name=pvc_usage&name=nope")
+	if code != http.StatusNotFound || b.Error != "unknown metric: nope, pvc_usage" {
+		t.Errorf("unknown names: code=%d body=%+v", code, b)
+	}
 	if code, _ := get(t, h, "/?time=yesterday"); code != http.StatusBadRequest {
 		t.Errorf("bad time: code=%d", code)
 	}

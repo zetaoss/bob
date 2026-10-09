@@ -73,8 +73,10 @@ count of each query on each engine. Engines are queried in parallel; if any call
 
 ## metrics API
 
-`GET /metrics/[?time=<RFC3339>]` runs every configured query at `time` (default: now);
-`GET /metrics/<name>` runs one. Queries run in parallel; if any fails, the response is `502`.
+`GET /metrics/?name=<name>&name=<name>...[&time=<RFC3339>]` runs the named queries at `time`
+(default: now); without `name` it runs every configured query, and `GET /metrics/<name>` runs one.
+An unknown name is a `404` listing the unknown names, so callers can ask for exactly what they need
+and fail when the config does not provide it. Queries run in parallel; if any fails, the response is `502`.
 
 ```json
 {"status":"ok","time":"2026-10-09T07:00:00Z","result":{

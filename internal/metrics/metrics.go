@@ -47,25 +47,34 @@ type response struct {
 	Error  string              `json:"error,omitempty"`
 }
 
-// ServeHTTP answers GET /[?time=<RFC3339>] with every configured metric and GET /<name> with one.
-// Without time, the current values are returned. Any failed query fails the request (502).
+// ServeHTTP answers GET /[?name=<name>...][&time=<RFC3339>] with the named metrics (all when no
+// name is given) and GET /<name> with one. An unknown name is a 404. Without time, the current
+// values are returned. Any failed query fails the request (502).
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeJSON(w, http.StatusMethodNotAllowed, response{Status: "error", Error: "method not allowed"})
 		return
 	}
-	names := make([]string, 0, len(h.queries))
+	names := r.URL.Query()["name"]
 	if name := strings.TrimPrefix(r.URL.Path, "/"); name != "" {
-		if _, ok := h.queries[name]; !ok {
-			writeJSON(w, http.StatusNotFound, response{Status: "error", Error: "unknown metric: " + name})
-			return
-		}
-		names = append(names, name)
-	} else {
+		names = []string{name}
+	}
+	if len(names) == 0 {
 		for name := range h.queries {
 			names = append(names, name)
 		}
-		slices.Sort(names)
+	}
+	slices.Sort(names)
+	names = slices.Compact(names)
+	var unknown []string
+	for _, name := range names {
+		if _, ok := h.queries[name]; !ok {
+			unknown = append(unknown, name)
+		}
+	}
+	if len(unknown) > 0 {
+		writeJSON(w, http.StatusNotFound, response{Status: "error", Error: "unknown metric: " + strings.Join(unknown, ", ")})
+		return
 	}
 
 	at := time.Now().UTC()
