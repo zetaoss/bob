@@ -2,7 +2,7 @@
 
 bob (Backend Of Backend) is the in-cluster app server for [zengine](https://github.com/zetaoss/zengine).
 zengine stays thin: features it needs from inside the cluster live in bob. bob serves what it can
-directly and forwards the rest (isolated execution, storage) to upstream services. It has no Ingress;
+directly and forwards the rest to upstream services. It has no Ingress;
 only zengine calls it.
 
 | Route | Handled by |
@@ -13,10 +13,11 @@ only zengine calls it.
 | `/metrics/` | bob: named PromQL queries from the config, run against Prometheus |
 | `/cloudflare/` | bob: Cloudflare zone analytics per hour or day |
 | `/ga/`, `/gsc/` | bob: Google Analytics 4 and Search Console reports per hour or day |
+| `/runbox/` | bob: runs code in throwaway containers on a Docker daemon (moved from [runbox](https://github.com/zetaoss/runbox)) |
 | `/<name>/` | forwarded to the upstream configured under `proxies.<name>` |
 
 Forwarding strips the route prefix and keeps the rest of the path and the query:
-`/runbox/lang` with `runbox: http://runbox` goes to `http://runbox/lang`.
+`/shellbox-score/score` with `shellbox-score: http://shellbox-score` goes to `http://shellbox-score/score`.
 Responses are flushed as they arrive, so streaming upstreams pass through.
 Unknown routes return `404`; an unreachable upstream returns `502`.
 
@@ -40,14 +41,16 @@ See [`config.example.yaml`](config.example.yaml).
 - `google.serviceAccount` is a service account key (JSON) with read access to the GA4 property
   (`gaPropertyID`, enables `/ga/`) and the Search Console site (`gscSiteURL`, enables `/gsc/`).
   The GA property's time zone is read from GA's responses.
+- `runbox.dockerHost` enables `/runbox/`: `tcp://host:port` with TLS client authentication
+  (`caCert`, `clientCert`, `clientKey` as PEM), or `unix:///var/run/docker.sock` for local development.
 - `proxies` maps a route name (lowercase letters, digits, `-`; not a built-in route) to an `http(s)` base URL.
 
 - Unknown keys are rejected, so a misspelled key fails at startup instead of being ignored.
-- `aigate.providers.*.apiKey`, `search.*`, `cloudflare.*`, `google.*` and `proxies` values may reference environment variables as `${NAME}`
+- `aigate.providers.*.apiKey`, `search.*`, `cloudflare.*`, `google.*`, `runbox.*` and `proxies` values may reference environment variables as `${NAME}`
   (an unset variable is a startup error). Keep secrets in the environment and the file in version control or a ConfigMap.
 
 Logs are JSON lines on stderr (`log/slog`). Every request except `/healthz` gets an access log with
-method, path, status and duration. API keys are printed as `[redacted]` in the startup config log.
+method, path, status and duration. API keys and runbox certificates are printed as `[redacted]` in the startup config log.
 
 ## aigate API
 
@@ -127,6 +130,32 @@ returns RFC3339 UTC hours or Pacific dates.
 GA dates and hours are converted with the property's time zone from GA's response metadata;
 Search Console hours are Pacific time. GSC `ctr` is a percentage;
 `ctr` and `position` are rounded to 4 decimals. Access tokens are reused until shortly before they expire.
+
+## runbox API
+
+`POST /runbox/lang` runs files of one language; `POST /runbox/notebook` runs code cells in Jupyter
+(`python`, `r`) and returns each cell's outputs.
+
+```sh
+curl -X POST http://localhost:8080/runbox/lang -d '{"lang":"python","files":[{"body":"print(1)"}]}'
+{"logs":["11"],"mem":1636,"time":325}
+curl -X POST http://localhost:8080/runbox/notebook -d '{"lang":"python","sources":["1+1"]}'
+{"outputsList":[[{"output_type":"execute_result","data":{"text/plain":["2"]},"metadata":{},"execution_count":1}]],"cpu":...,"mem":...,"time":...,"timedout":false}
+```
+
+- Languages: `bash`, `c`, `cpp`, `csharp`, `go`, `java`, `kotlin`, `latex`/`tex`, `lua`, `mysql`, `perl`,
+  `php`, `powershell`, `python`, `r`, `ruby`, `sqlite3`. Images are `ghcr.io/zetaoss/runcontainers/<lang>`
+  (notebooks: `jmnote/runbox:<lang>-notebook`), pulled on first use.
+- `files[].name` defaults to `runbox.<ext>`; files with the same name are joined. `main` is the index of the
+  file php and r may rewrite (php adds `<?php` and the autoloader; r draws plots to PNG).
+- Each log is the stream (`1` stdout, `2` stderr) followed by the line. Up to 2 PNG files (10 for LaTeX) of at
+  most 100 KiB from the working directory are returned base64 in `images`. `cpu` is CPU microseconds, `mem` KiB,
+  `time` milliseconds. A run past its timeout (10 s; go, latex, mysql 30 s; kotlin 40 s; notebooks 60 s)
+  returns what it printed with `timedout: true`.
+- An unknown language, no files or no sources is `400`; a Docker failure is `500`. Errors are `{"error": ...}`.
+- Each run gets a fresh container (label `bob.runbox`, 100 processes) that is force-removed afterwards.
+  Before each run, `bob.runbox` containers older than 5 minutes are removed; other containers on the daemon
+  are left alone.
 
 ## Development
 

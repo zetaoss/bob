@@ -17,7 +17,7 @@ func load(t *testing.T, yaml string) (*Config, error) {
 }
 
 func TestLoadConfig_ProxiesOnly(t *testing.T) {
-	cfg, err := load(t, "proxies:\n  runbox: http://runbox.runbox\n")
+	cfg, err := load(t, "proxies:\n  shellbox-score: http://shellbox-score.shellbox\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,10 @@ func TestLoadConfig_Rejects(t *testing.T) {
 		"metrics bad name": "metrics:\n  prometheus: http://p:9090\n  queries: {Node-CPU: up}\n",
 		"metrics empty":    "metrics:\n  prometheus: http://p:9090\n  queries: {up: \"\"}\n",
 		"route with slash": "proxies:\n  a/b: http://x\n",
-		"bad upstream":     "proxies:\n  runbox: runbox.runbox\n",
+		"bad upstream":     "proxies:\n  shellbox-score: shellbox-score.shellbox\n",
+		"reserved runbox":  "proxies:\n  runbox: http://x\n",
+		"runbox no certs":  "runbox:\n  dockerHost: tcp://docker:2376\n",
+		"runbox bad host":  "runbox:\n  dockerHost: https://docker:2376\n",
 		"no providers":     "aigate:\n  models: [gemini/x]\n",
 	}
 	for name, yaml := range cases {
@@ -65,12 +68,12 @@ func TestLoadConfig_RejectsUnknownKeys(t *testing.T) {
 
 func TestLoadConfig_ExpandsEnv(t *testing.T) {
 	t.Setenv("BOB_TEST_KEY", "from-env")
-	t.Setenv("BOB_TEST_HOST", "runbox.internal")
-	cfg, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: \"${BOB_TEST_KEY}\"}\nproxies:\n  runbox: http://${BOB_TEST_HOST}\n")
+	t.Setenv("BOB_TEST_HOST", "score.internal")
+	cfg, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: \"${BOB_TEST_KEY}\"}\nproxies:\n  shellbox-score: http://${BOB_TEST_HOST}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AIGate.Providers["gemini"].APIKey != "from-env" || cfg.Proxies["runbox"] != "http://runbox.internal" {
+	if cfg.AIGate.Providers["gemini"].APIKey != "from-env" || cfg.Proxies["shellbox-score"] != "http://score.internal" {
 		t.Fatalf("env not expanded: %+v %+v", cfg.AIGate.Providers, cfg.Proxies)
 	}
 }
@@ -111,5 +114,27 @@ func TestRedactedYAML_HidesKeys(t *testing.T) {
 	}
 	if strings.Contains(out, "secret-key") || cfg.AIGate.Providers["gemini"].APIKey != "secret-key" {
 		t.Fatalf("redaction leaked or mutated config: %s", out)
+	}
+}
+
+func TestLoadConfig_Runbox(t *testing.T) {
+	t.Setenv("BOB_TEST_DOCKER_KEY", "-----BEGIN PRIVATE KEY-----")
+	cfg, err := load(t, "runbox:\n  dockerHost: tcp://docker:2376\n  caCert: ca\n  clientCert: cert\n  clientKey: \"${BOB_TEST_DOCKER_KEY}\"\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Runbox.Enabled() || cfg.Runbox.ClientKey != "-----BEGIN PRIVATE KEY-----" {
+		t.Fatalf("runbox not loaded: %+v", cfg.Runbox)
+	}
+	out, err := RedactedYAML(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "PRIVATE KEY") {
+		t.Fatalf("runbox client key leaked: %s", out)
+	}
+
+	if _, err := load(t, "runbox:\n  dockerHost: unix:///var/run/docker.sock\n"); err != nil {
+		t.Fatalf("unix dockerHost without certs: %v", err)
 	}
 }

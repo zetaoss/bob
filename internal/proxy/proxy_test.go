@@ -36,12 +36,12 @@ func TestNew_UpstreamDownIs502(t *testing.T) {
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close()
 
-	h, err := New("runbox", down.URL, logging.New(io.Discard, "error"))
+	h, err := New("shellbox-score", down.URL, logging.New(io.Discard, "error"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/runbox/lang", nil))
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/shellbox-score/score", nil))
 
 	if rec.Code != http.StatusBadGateway {
 		t.Fatalf("expected 502, got %d", rec.Code)

@@ -1,5 +1,5 @@
 // bob (Backend Of Backend) is the in-cluster app server for zengine.
-// It serves features directly (/aigate) and forwards the rest to upstream services (proxies).
+// It serves features directly (/aigate, /runbox, ...) and forwards the rest to upstream services (proxies).
 package main
 
 import (
@@ -23,6 +23,7 @@ import (
 	"bob/internal/logging"
 	"bob/internal/metrics"
 	"bob/internal/proxy"
+	"bob/internal/runbox"
 	"bob/internal/search"
 )
 
@@ -104,6 +105,15 @@ func main() {
 			mux.Handle("/gsc/", http.StripPrefix("/gsc", g.GSC()))
 			logger.Info("route", "path", "/gsc/", "handler", "search console", "site", cfg.Google.GSCSiteURL)
 		}
+	}
+
+	if cfg.Runbox.Enabled() {
+		rb, err := runbox.NewHandler(cfg.Runbox, logger)
+		if err != nil {
+			fatal(logger, "failed to initialize runbox", err)
+		}
+		mux.Handle("/runbox/", http.StripPrefix("/runbox", rb))
+		logger.Info("route", "path", "/runbox/", "handler", "runbox", "docker", cfg.Runbox.DockerHost)
 	}
 
 	names := make([]string, 0, len(cfg.Proxies))
