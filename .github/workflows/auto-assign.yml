@@ -1,24 +1,19 @@
 name: Auto Assign
-
 on:
+  issues:
+    types: [opened]
   pull_request:
-    types: [opened, reopened]
-  workflow_dispatch:
-
-permissions:
-  contents: read
-  pull-requests: write
-
+    types: [opened]
 jobs:
-  assign-author:
+  run:
     runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
     steps:
-      - name: Assign PR author
-        uses: actions/github-script@v8
-        with:
-          script: |
-            const owner = context.repo.owner;
-            const repo = context.repo.repo;
-            const issue_number = context.payload.pull_request.number;
-            const assignees = [context.payload.pull_request.user.login];
-            await github.rest.issues.addAssignees({ owner, repo, issue_number, assignees });
+    - name: 'Auto-assign issue'
+      uses: pozil/auto-assign-issue@v3
+      with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          assignees: jmnote
+          numOfAssignee: 1

@@ -17,7 +17,7 @@ import (
 	"bob/internal/logging"
 )
 
-// Config is read from a YAML file; unknown keys are rejected. String values of providers.*.apiKey and proxies may reference
+// Config is read from a YAML file; unknown keys are rejected. Credential values and proxies may reference
 // environment variables as ${NAME}, so secrets can come from the environment.
 type Config struct {
 	Server ServerConfig `yaml:"server"`
@@ -31,6 +31,8 @@ type Config struct {
 	Cloudflare CloudflareConfig `yaml:"cloudflare"`
 	// Google enables /ga/ and /gsc/ when serviceAccount and the property or site are set.
 	Google GoogleConfig `yaml:"google"`
+	// Runbox enables /runbox/ when dockerHost is set.
+	Runbox RunboxConfig `yaml:"runbox"`
 	// Proxies maps a route name to an upstream base URL: /<name>/... is forwarded to <url>/...
 	Proxies map[string]string `yaml:"proxies,omitempty"`
 }
@@ -74,6 +76,20 @@ type GoogleConfig struct {
 // Enabled reports whether /ga/ or /gsc/ should be served.
 func (c GoogleConfig) Enabled() bool {
 	return c.ServiceAccount != "" && (c.GAPropertyID != "" || c.GSCSiteURL != "")
+}
+
+// RunboxConfig is the Docker daemon /runbox/ runs code on: tcp://host:port with TLS client
+// authentication (PEM), or unix:///path for local development.
+type RunboxConfig struct {
+	DockerHost string `yaml:"dockerHost"`
+	CACert     string `yaml:"caCert"`
+	ClientCert string `yaml:"clientCert"`
+	ClientKey  string `yaml:"clientKey"`
+}
+
+// Enabled reports whether /runbox/ should be served.
+func (c RunboxConfig) Enabled() bool {
+	return c.DockerHost != ""
 }
 
 // MetricsConfig names PromQL instant queries that /metrics/ runs against a Prometheus-compatible API.
@@ -134,7 +150,7 @@ func expandEnv(field, value string) (string, error) {
 // routeName is a single path segment. Reserved names are served by bob itself.
 var routeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-var reservedRoutes = []string{"aigate", "cloudflare", "ga", "gsc", "healthz", "metrics", "search"}
+var reservedRoutes = []string{"aigate", "cloudflare", "ga", "gsc", "healthz", "metrics", "runbox", "search"}
 
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -180,6 +196,10 @@ func LoadConfig(path string) (*Config, error) {
 		"google.serviceAccount":    &cfg.Google.ServiceAccount,
 		"google.gaPropertyID":      &cfg.Google.GAPropertyID,
 		"google.gscSiteURL":        &cfg.Google.GSCSiteURL,
+		"runbox.dockerHost":        &cfg.Runbox.DockerHost,
+		"runbox.caCert":            &cfg.Runbox.CACert,
+		"runbox.clientCert":        &cfg.Runbox.ClientCert,
+		"runbox.clientKey":         &cfg.Runbox.ClientKey,
 	} {
 		expanded, err := expandEnv(field, *value)
 		if err != nil {
@@ -203,6 +223,19 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
+	if cfg.Runbox.Enabled() {
+		u, err := url.Parse(cfg.Runbox.DockerHost)
+		switch {
+		case err == nil && u.Scheme == "unix" && u.Path != "":
+		case err == nil && u.Scheme == "tcp" && u.Host != "":
+			if cfg.Runbox.CACert == "" || cfg.Runbox.ClientCert == "" || cfg.Runbox.ClientKey == "" {
+				return nil, fmt.Errorf("config runbox: a tcp dockerHost needs caCert, clientCert and clientKey")
+			}
+		default:
+			return nil, fmt.Errorf("config runbox.dockerHost must be tcp://host:port or unix:///path, got %q", cfg.Runbox.DockerHost)
+		}
+	}
+
 	for name, target := range cfg.Proxies {
 		target, err := expandEnv("proxies."+name, target)
 		if err != nil {
@@ -218,8 +251,8 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	if !cfg.AIGate.Enabled() && !cfg.Search.Enabled() && !cfg.Metrics.Enabled() && !cfg.Cloudflare.Enabled() && !cfg.Google.Enabled() && len(cfg.Proxies) == 0 {
-		return nil, fmt.Errorf("config must enable aigate, search, metrics, cloudflare or google, or define at least one proxy")
+	if !cfg.AIGate.Enabled() && !cfg.Search.Enabled() && !cfg.Metrics.Enabled() && !cfg.Cloudflare.Enabled() && !cfg.Google.Enabled() && !cfg.Runbox.Enabled() && len(cfg.Proxies) == 0 {
+		return nil, fmt.Errorf("config must enable aigate, search, metrics, cloudflare, google or runbox, or define at least one proxy")
 	}
 	return &cfg, nil
 }
@@ -276,7 +309,7 @@ func RedactedYAML(cfg *Config) (string, error) {
 		}
 		redacted.AIGate.Providers[name] = copyProvider
 	}
-	for _, secret := range []*string{&redacted.Search.KakaoAPIKey, &redacted.Search.NaverClientSecret, &redacted.Search.GoogleAPIKey, &redacted.Cloudflare.APIToken, &redacted.Google.ServiceAccount} {
+	for _, secret := range []*string{&redacted.Search.KakaoAPIKey, &redacted.Search.NaverClientSecret, &redacted.Search.GoogleAPIKey, &redacted.Cloudflare.APIToken, &redacted.Google.ServiceAccount, &redacted.Runbox.CACert, &redacted.Runbox.ClientCert, &redacted.Runbox.ClientKey} {
 		if strings.TrimSpace(*secret) != "" {
 			*secret = "[redacted]"
 		}

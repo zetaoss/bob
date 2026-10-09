@@ -2,7 +2,7 @@ server:
   port: 8080
   logLevel: info
 
-# Unknown keys are rejected. providers.*.apiKey and proxies values may reference
+# Unknown keys are rejected. Credential and proxies values may reference
 # environment variables as ${NAME}; an unset variable is a startup error.
 
 # /aigate: LLM routing with fallback. Omit models to disable the route.
@@ -50,7 +50,14 @@ google:
   gaPropertyID: "123456789"
   gscSiteURL: sc-domain:example.com
 
+# /runbox/lang and /runbox/notebook: code runs in throwaway containers on this Docker daemon.
+# tcp:// needs TLS client certificates (PEM); unix:// is for local development. Omit to disable.
+runbox:
+  dockerHost: tcp://docker:2376
+  caCert: ${RUNBOX_DOCKER_CA}
+  clientCert: ${RUNBOX_DOCKER_CERT}
+  clientKey: ${RUNBOX_DOCKER_KEY}
+
 # /<name>/... is forwarded to <url>/... (prefix stripped, query kept).
 proxies:
-  runbox: http://runbox
   shellbox-score: http://shellbox-score

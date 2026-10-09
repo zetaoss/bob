@@ -13,7 +13,7 @@ FROM gcr.io/distroless/static-debian12:nonroot
 WORKDIR /app
 
 COPY --from=builder /out/bob /app/bob
-COPY config.yaml.example /app/config.yaml
+COPY config.example.yaml /app/config.yaml
 
 EXPOSE 8080
 
