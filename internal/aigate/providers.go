@@ -103,7 +103,7 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("marshal provider request: %w", err)
 	}
-	g.logDebug("provider request provider=%s endpoint=%s body=%s", route.Provider, endpoint, string(bodyBytes))
+	g.log.Debug("provider request", "provider", route.Provider, "endpoint", endpoint, "body", string(bodyBytes))
 
 	httpReq, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(bodyBytes))
 	if err != nil {
@@ -114,7 +114,7 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 	if provider.APIKey != "" {
 		httpReq.Header.Set("Authorization", fmt.Sprintf("Bearer %s", provider.APIKey))
 	}
-	g.logDebug("provider request headers provider=%s content-type=%s authorization=%s", route.Provider, httpReq.Header.Get("Content-Type"), redactAuth(httpReq.Header.Get("Authorization")))
+	g.log.Debug("provider request headers", "provider", route.Provider, "content_type", httpReq.Header.Get("Content-Type"), "authorization", redactAuth(httpReq.Header.Get("Authorization")))
 
 	timeout := g.cfg.Fallback.PerAttemptTimeout
 	if timeout <= 0 {
@@ -141,10 +141,10 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 	if err != nil {
 		return nil, fmt.Errorf("read provider response: %w", err)
 	}
-	g.logDebug("provider response provider=%s status=%d body=%s", route.Provider, resp.StatusCode, string(respBytes))
+	g.log.Debug("provider response", "provider", route.Provider, "status", resp.StatusCode, "body", string(respBytes))
 
 	if resp.StatusCode >= 400 {
-		g.logError("provider error provider=%s status=%d", route.Provider, resp.StatusCode)
+		g.log.Error("provider error", "provider", route.Provider, "status", resp.StatusCode)
 		return nil, &providerCallError{
 			StatusCode: resp.StatusCode,
 			Err:        fmt.Errorf("provider %s returned status %d: %s", route.Provider, resp.StatusCode, strings.TrimSpace(string(respBytes))),

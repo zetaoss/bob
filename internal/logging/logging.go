@@ -1,63 +1,62 @@
-// Package logging provides leveled logging and the HTTP access log.
+// Package logging builds the JSON slog logger and the HTTP access log.
 package logging
 
 import (
-	"fmt"
-	"log"
+	"io"
+	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
-
-type level int
-
-const (
-	levelDebug level = iota
-	levelInfo
-	levelError
-)
-
-// Logger writes leveled lines through the standard log package.
-type Logger struct {
-	level level
-}
 
 // Normalize returns the canonical form of a configured log level.
 func Normalize(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
-// New returns a Logger for "debug", "info" or "error"; anything else means "info".
-func New(value string) *Logger {
-	switch Normalize(value) {
+// New returns a JSON logger writing to w at "debug", "info" or "error"; anything else means "info".
+func New(w io.Writer, level string) *slog.Logger {
+	lv := slog.LevelInfo
+	switch Normalize(level) {
 	case "debug":
-		return &Logger{level: levelDebug}
+		lv = slog.LevelDebug
 	case "error":
-		return &Logger{level: levelError}
-	default:
-		return &Logger{level: levelInfo}
+		lv = slog.LevelError
 	}
+	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: lv}))
 }
 
-func (l *Logger) Debugf(format string, args ...any) {
-	l.printf(levelDebug, "[debug] ", format, args...)
-}
-func (l *Logger) Infof(format string, args ...any) { l.printf(levelInfo, "[info] ", format, args...) }
-func (l *Logger) Errorf(format string, args ...any) {
-	l.printf(levelError, "[error] ", format, args...)
-}
-
-func (l *Logger) printf(lv level, prefix, format string, args ...any) {
-	if lv >= l.level {
-		log.Print(prefix + fmt.Sprintf(format, args...))
-	}
-}
-
-// Middleware access-logs every request except health checks.
-func Middleware(l *Logger, next http.Handler) http.Handler {
+// Middleware access-logs every request except health checks, with status and duration.
+func Middleware(l *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if !strings.HasSuffix(r.URL.Path, "/healthz") {
-			l.Infof("%s %s from %s", r.Method, r.URL.Path, r.RemoteAddr)
+		if strings.HasSuffix(r.URL.Path, "/healthz") {
+			next.ServeHTTP(w, r)
+			return
 		}
-		next.ServeHTTP(w, r)
+		start := time.Now()
+		rec := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rec, r)
+		l.Info("request",
+			"method", r.Method,
+			"path", r.URL.Path,
+			"status", rec.status,
+			"duration_ms", time.Since(start).Milliseconds(),
+			"remote", r.RemoteAddr,
+		)
 	})
+}
+
+type statusRecorder struct {
+	http.ResponseWriter
+	status int
+}
+
+func (r *statusRecorder) WriteHeader(code int) {
+	r.status = code
+	r.ResponseWriter.WriteHeader(code)
+}
+
+// Unwrap lets http.ResponseController reach Flush on the underlying writer (streaming proxies).
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
 }

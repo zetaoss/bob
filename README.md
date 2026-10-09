@@ -33,7 +33,8 @@ See [`config.yaml.example`](config.yaml.example).
 - `aigate.providers.*.apiKey` and `proxies` values may reference environment variables as `${NAME}`
   (an unset variable is a startup error). Keep secrets in the environment and the file in version control or a ConfigMap.
 
-API keys are printed as `[redacted]` in the startup config log.
+Logs are JSON lines on stderr (`log/slog`). Every request except `/healthz` gets an access log with
+method, path, status and duration. API keys are printed as `[redacted]` in the startup config log.
 
 ## aigate API
 

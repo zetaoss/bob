@@ -17,7 +17,7 @@ func TestNew_StripsPrefixAndKeepsQuery(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h, err := New("search", upstream.URL, logging.New("error"))
+	h, err := New("search", upstream.URL, logging.New(io.Discard, "error"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -36,7 +36,7 @@ func TestNew_UpstreamDownIs502(t *testing.T) {
 	down := httptest.NewServer(http.NotFoundHandler())
 	down.Close()
 
-	h, err := New("runbox", down.URL, logging.New("error"))
+	h, err := New("runbox", down.URL, logging.New(io.Discard, "error"))
 	if err != nil {
 		t.Fatal(err)
 	}

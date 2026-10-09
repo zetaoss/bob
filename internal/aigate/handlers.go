@@ -3,19 +3,19 @@ package aigate
 import (
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
 
 	"bob/internal/config"
-	"bob/internal/logging"
 )
 
 // Gateway routes OpenAI-style chat completions to configured providers with fallback.
 // Moved from github.com/zetaoss/aigate; bob serves it under /aigate.
 type Gateway struct {
 	cfg                  *config.AIGateConfig
-	log                  *logging.Logger
+	log                  *slog.Logger
 	providerMap          map[string]config.ProviderConfig
 	modelRoutes          map[string]ModelRoute
 	modelOrder           []string
@@ -45,7 +45,7 @@ type Message struct {
 	Content string `json:"content"`
 }
 
-func NewGateway(cfg *config.AIGateConfig, log *logging.Logger) (*Gateway, error) {
+func NewGateway(cfg *config.AIGateConfig, log *slog.Logger) (*Gateway, error) {
 	modelRoutes := make(map[string]ModelRoute)
 	modelOrder := make([]string, 0, len(cfg.Models))
 	providerMap := make(map[string]config.ProviderConfig, len(cfg.Providers))
@@ -246,14 +246,14 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 
 	responseBody, resolvedModel, attemptedModels, err := g.callWithFallback(req, modelChain)
 	if err != nil {
-		g.logError("chat completion failed model=%s err=%v", req.Model, err)
+		g.log.Error("chat completion failed", "model", req.Model, "err", err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
-	g.logInfo("chat completion routed requested_model=%s resolved_model=%s", req.Model, resolvedModel)
+	g.log.Info("chat completion routed", "requested_model", req.Model, "resolved_model", resolvedModel)
 	responseBody, err = addProviderMeta(responseBody, req.Model, attemptedModels)
 	if err != nil {
-		g.logError("chat completion metadata decoration failed model=%s err=%v", req.Model, err)
+		g.log.Error("chat completion metadata decoration failed", "model", req.Model, "err", err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 		return
 	}
@@ -324,7 +324,7 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 		if i == attemptLimit-1 {
 			return nil, "", append([]string(nil), attempted...), fmt.Errorf("attempted models=%s: %w", strings.Join(attempted, ","), err)
 		}
-		g.logError("fallback next model after failure model=%s err=%v", modelID, err)
+		g.log.Error("fallback to next model after failure", "model", modelID, "err", err)
 	}
 
 	if lastErr == nil {

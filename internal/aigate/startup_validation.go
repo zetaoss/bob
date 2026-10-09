@@ -23,12 +23,12 @@ func (g *Gateway) LoadAvailableModels(ctx context.Context) {
 		models, err := g.fetchAvailableModels(ctx, provider)
 		if err != nil {
 			g.availableModelErrors[provider] = err
-			g.logError("available model load failed provider=%s err=%v", provider, err)
+			g.log.Error("available model load failed", "provider", provider, "err", err)
 			continue
 		}
 		g.availableModels[provider] = models
 		delete(g.availableModelErrors, provider)
-		g.logInfo("available model load passed provider=%s count=%d models=%s", provider, len(models), strings.Join(models, ","))
+		g.log.Info("available model load passed", "provider", provider, "count", len(models), "models", models)
 	}
 }
 
@@ -37,7 +37,7 @@ func (g *Gateway) ValidateStartupModels() error {
 		if err := g.validateModelAvailability(route); err != nil {
 			return fmt.Errorf("startup model validation failed for %q: %w", publicModel, err)
 		}
-		g.logInfo("startup model validation passed model=%s provider=%s", publicModel, route.Provider)
+		g.log.Info("startup model validation passed", "model", publicModel, "provider", route.Provider)
 	}
 	return nil
 }

@@ -8,8 +8,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
+	"os"
 	"os/signal"
 	"slices"
 	"syscall"
@@ -27,15 +28,17 @@ func main() {
 
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
-		log.Fatalf("failed to load config: %v", err)
+		fatal(slog.Default(), "failed to load config", err)
 	}
+	logger := logging.New(os.Stderr, cfg.Server.LogLevel)
+	slog.SetDefault(logger)
+
 	redactedCfg, err := config.RedactedYAML(cfg)
 	if err != nil {
-		log.Fatalf("failed to render startup config: %v", err)
+		fatal(logger, "failed to render startup config", err)
 	}
-	log.Printf("loaded config:\n%s", redactedCfg)
+	logger.Info("loaded config", "config", redactedCfg)
 
-	logger := logging.New(cfg.Server.LogLevel)
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"status": "ok"})
@@ -47,16 +50,16 @@ func main() {
 	if cfg.AIGate.Enabled() {
 		gw, err := aigate.NewGateway(&cfg.AIGate, logger)
 		if err != nil {
-			log.Fatalf("failed to initialize aigate: %v", err)
+			fatal(logger, "failed to initialize aigate", err)
 		}
 		gw.LoadAvailableModels(context.Background())
 		if *cfg.AIGate.ValidateModelsOnStartup {
 			if err := gw.ValidateStartupModels(); err != nil {
-				log.Fatalf("failed startup model validation: %v", err)
+				fatal(logger, "failed startup model validation", err)
 			}
 		}
 		mux.Handle("/aigate/", http.StripPrefix("/aigate", gw.Handler()))
-		log.Printf("route /aigate/ -> aigate")
+		logger.Info("route", "path", "/aigate/", "handler", "aigate")
 	}
 
 	names := make([]string, 0, len(cfg.Proxies))
@@ -67,10 +70,10 @@ func main() {
 	for _, name := range names {
 		h, err := proxy.New(name, cfg.Proxies[name], logger)
 		if err != nil {
-			log.Fatalf("failed to initialize proxy: %v", err)
+			fatal(logger, "failed to initialize proxy", err)
 		}
 		mux.Handle("/"+name+"/", h)
-		log.Printf("route /%s/ -> %s", name, cfg.Proxies[name])
+		logger.Info("route", "path", "/"+name+"/", "upstream", cfg.Proxies[name])
 	}
 
 	srv := &http.Server{
@@ -88,10 +91,15 @@ func main() {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("starting bob on %s", srv.Addr)
+	logger.Info("starting bob", "addr", srv.Addr)
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("server error: %v", err)
+		fatal(logger, "server error", err)
 	}
+}
+
+func fatal(l *slog.Logger, msg string, err error) {
+	l.Error(msg, "err", err)
+	os.Exit(1)
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload any) {
