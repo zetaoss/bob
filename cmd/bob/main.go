@@ -19,6 +19,7 @@ import (
 	"bob/internal/aigate"
 	"bob/internal/cloudflare"
 	"bob/internal/config"
+	"bob/internal/google"
 	"bob/internal/logging"
 	"bob/internal/metrics"
 	"bob/internal/proxy"
@@ -88,6 +89,21 @@ func main() {
 	if cfg.Cloudflare.Enabled() {
 		mux.Handle("/cloudflare/", http.StripPrefix("/cloudflare", cloudflare.NewHandler(cfg.Cloudflare, logger)))
 		logger.Info("route", "path", "/cloudflare/", "handler", "cloudflare")
+	}
+
+	if cfg.Google.Enabled() {
+		g, err := google.NewHandler(cfg.Google, logger)
+		if err != nil {
+			fatal(logger, "failed to initialize google", err)
+		}
+		if cfg.Google.GAPropertyID != "" {
+			mux.Handle("/ga/", http.StripPrefix("/ga", g.GA()))
+			logger.Info("route", "path", "/ga/", "handler", "google analytics", "property", cfg.Google.GAPropertyID)
+		}
+		if cfg.Google.GSCSiteURL != "" {
+			mux.Handle("/gsc/", http.StripPrefix("/gsc", g.GSC()))
+			logger.Info("route", "path", "/gsc/", "handler", "search console", "site", cfg.Google.GSCSiteURL)
+		}
 	}
 
 	names := make([]string, 0, len(cfg.Proxies))

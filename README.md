@@ -12,6 +12,7 @@ only zengine calls it.
 | `/search/` | bob: result counts across search engines (moved from [queryhub](https://github.com/zetaoss/queryhub)) |
 | `/metrics/` | bob: named PromQL queries from the config, run against Prometheus |
 | `/cloudflare/` | bob: Cloudflare zone analytics per hour or day |
+| `/ga/`, `/gsc/` | bob: Google Analytics 4 and Search Console reports per hour or day |
 | `/<name>/` | forwarded to the upstream configured under `proxies.<name>` |
 
 Forwarding strips the route prefix and keeps the rest of the path and the query:
@@ -36,10 +37,13 @@ See [`config.yaml.example`](config.yaml.example).
 - `metrics.queries` maps a name (lowercase letters, digits, `_`) to a PromQL instant query run against
   `metrics.prometheus`. The route is enabled when at least one query is set.
 - `cloudflare` is enabled when `apiToken` (Zone Analytics read) and `zoneID` are set.
-- `proxies` maps a route name (lowercase letters, digits, `-`; not `healthz`, `aigate`, `cloudflare`, `metrics` or `search`) to an `http(s)` base URL.
+- `google.serviceAccount` is a service account key (JSON) with read access to the GA4 property
+  (`gaPropertyID`, enables `/ga/`) and the Search Console site (`gscSiteURL`, enables `/gsc/`).
+  `gaTimezone` (default `UTC`) is the zone GA date/hour values are read in.
+- `proxies` maps a route name (lowercase letters, digits, `-`; not a built-in route) to an `http(s)` base URL.
 
 - Unknown keys are rejected, so a misspelled key fails at startup instead of being ignored.
-- `aigate.providers.*.apiKey`, `search.*`, `cloudflare.*` and `proxies` values may reference environment variables as `${NAME}`
+- `aigate.providers.*.apiKey`, `search.*`, `cloudflare.*`, `google.*` (except `gaTimezone`) and `proxies` values may reference environment variables as `${NAME}`
   (an unset variable is a startup error). Keep secrets in the environment and the file in version control or a ConfigMap.
 
 Logs are JSON lines on stderr (`log/slog`). Every request except `/healthz` gets an access log with
@@ -106,6 +110,20 @@ Metric values are text: numbers as Go's `%v` of the decoded JSON number, maps (b
 type, TLS, country, IP class, status, threat pathing) as JSON. Names: `uniq_uniques`, `sum_requests`,
 `sum_pageViews`, `sum_bytes`, `sum_cachedBytes`, `sum_cachedRequests`, `sum_encryptedBytes`,
 `sum_encryptedRequests`, `sum_threats`, and `sum_<name>Map` for the maps.
+
+## ga and gsc API
+
+`GET /ga/report?interval=hour|day&since=<YYYY-MM-DD>&until=<YYYY-MM-DD>` and
+`GET /gsc/query?interval=hour|day&since=...&until=...` (both dates inclusive) return one row per
+timeslot: RFC3339 UTC for `hour`, the date for `day`.
+
+```json
+{"status":"ok","result":[{"timeslot":"2026-10-09T07:00:00Z","sessions":5,"screen_page_views":9,"active_users":3}]}
+{"status":"ok","result":[{"timeslot":"2026-10-09T07:00:00Z","clicks":12,"impressions":340,"ctr":3.5294,"position":7.1235}]}
+```
+
+GA hours are read in `gaTimezone`; Search Console hours are Pacific time. GSC `ctr` is a percentage;
+`ctr` and `position` are rounded to 4 decimals. Access tokens are reused until shortly before they expire.
 
 ## Development
 
