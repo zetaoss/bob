@@ -9,10 +9,11 @@ only zengine calls it.
 | --- | --- |
 | `/healthz` | bob |
 | `/aigate/` | bob: LLM routing with fallback across providers (moved from [aigate](https://github.com/zetaoss/aigate)) |
+| `/search/` | bob: result counts across search engines (moved from [queryhub](https://github.com/zetaoss/queryhub)) |
 | `/<name>/` | forwarded to the upstream configured under `proxies.<name>` |
 
 Forwarding strips the route prefix and keeps the rest of the path and the query:
-`/search/search?q=x` with `search: http://search` goes to `http://search/search?q=x`.
+`/runbox/lang` with `runbox: http://runbox` goes to `http://runbox/lang`.
 Responses are flushed as they arrive, so streaming upstreams pass through.
 Unknown routes return `404`; an unreachable upstream returns `502`.
 
@@ -27,10 +28,13 @@ See [`config.yaml.example`](config.yaml.example).
   - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
   - `fallback.rounds` (default `2`) is how many passes over the model chain are tried; `fallback.perAttemptTimeout` (default `30s`) is the per-attempt HTTP timeout.
   - `model` may be omitted (configured order), a provider name (that provider's models), or a configured model (tried first, then the rest).
-- `proxies` maps a route name (lowercase letters, digits, `-`; not `healthz` or `aigate`) to an `http(s)` base URL.
+- `search` holds search API credentials. Each engine is used only when its credentials are set
+  (`daum_blog`: Kakao key; `naver_blog`, `naver_news`: Naver client ID and secret; `google_search`: Google API key and CX).
+  The route is enabled when at least one engine is.
+- `proxies` maps a route name (lowercase letters, digits, `-`; not `healthz`, `aigate` or `search`) to an `http(s)` base URL.
 
 - Unknown keys are rejected, so a misspelled key fails at startup instead of being ignored.
-- `aigate.providers.*.apiKey` and `proxies` values may reference environment variables as `${NAME}`
+- `aigate.providers.*.apiKey`, `search.*` and `proxies` values may reference environment variables as `${NAME}`
   (an unset variable is a startup error). Keep secrets in the environment and the file in version control or a ConfigMap.
 
 Logs are JSON lines on stderr (`log/slog`). Every request except `/healthz` gets an access log with
@@ -51,6 +55,18 @@ curl -X POST http://localhost:8080/aigate/v1/chat/completions \
   -H "Content-Type: application/json" \
   -d '{"model":"gemini/gemini-2.5-flash","messages":[{"role":"user","content":"Hello"}]}'
 ```
+
+## search API
+
+`GET /search/search?q=<term>&q=<term>[&q=<term>&q=<term>]` takes 2 to 4 queries and returns the result
+count of each query on each engine. Engines are queried in parallel; if any call fails, the response is
+`500` with the failing engine in `error`.
+
+```json
+{"status":"ok","result":{"engines":["daum_blog","google_search","naver_blog","naver_news"],"values":[[576,10700,1899,0],[840,293000000,1409,18]]}}
+```
+
+`values[i][j]` is the count for query `i` on engine `j`. Google wraps the query in double quotes (exact match).
 
 ## Development
 

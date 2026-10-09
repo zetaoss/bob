@@ -20,6 +20,7 @@ import (
 	"bob/internal/config"
 	"bob/internal/logging"
 	"bob/internal/proxy"
+	"bob/internal/search"
 )
 
 func main() {
@@ -60,6 +61,16 @@ func main() {
 		}
 		mux.Handle("/aigate/", http.StripPrefix("/aigate", gw.Handler()))
 		logger.Info("route", "path", "/aigate/", "handler", "aigate")
+	}
+
+	if cfg.Search.Enabled() {
+		engines := search.Engines(cfg.Search)
+		engineNames := make([]string, len(engines))
+		for i, e := range engines {
+			engineNames[i] = e.Name
+		}
+		mux.Handle("/search/", http.StripPrefix("/search", search.NewHandler(engines, logger)))
+		logger.Info("route", "path", "/search/", "handler", "search", "engines", engineNames)
 	}
 
 	names := make([]string, 0, len(cfg.Proxies))

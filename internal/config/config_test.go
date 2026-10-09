@@ -17,7 +17,7 @@ func load(t *testing.T, yaml string) (*Config, error) {
 }
 
 func TestLoadConfig_ProxiesOnly(t *testing.T) {
-	cfg, err := load(t, "proxies:\n  search: http://search.search\n")
+	cfg, err := load(t, "proxies:\n  runbox: http://runbox.runbox\n")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,8 +40,9 @@ func TestLoadConfig_Rejects(t *testing.T) {
 	cases := map[string]string{
 		"empty":            "server: {port: 8080}\n",
 		"reserved route":   "proxies:\n  aigate: http://x\n",
+		"reserved search":  "proxies:\n  search: http://x\n",
 		"route with slash": "proxies:\n  a/b: http://x\n",
-		"bad upstream":     "proxies:\n  search: search.search\n",
+		"bad upstream":     "proxies:\n  runbox: runbox.runbox\n",
 		"no providers":     "aigate:\n  models: [gemini/x]\n",
 	}
 	for name, yaml := range cases {
@@ -59,12 +60,12 @@ func TestLoadConfig_RejectsUnknownKeys(t *testing.T) {
 
 func TestLoadConfig_ExpandsEnv(t *testing.T) {
 	t.Setenv("BOB_TEST_KEY", "from-env")
-	t.Setenv("BOB_TEST_HOST", "search.internal")
-	cfg, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: \"${BOB_TEST_KEY}\"}\nproxies:\n  search: http://${BOB_TEST_HOST}\n")
+	t.Setenv("BOB_TEST_HOST", "runbox.internal")
+	cfg, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: \"${BOB_TEST_KEY}\"}\nproxies:\n  runbox: http://${BOB_TEST_HOST}\n")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cfg.AIGate.Providers["gemini"].APIKey != "from-env" || cfg.Proxies["search"] != "http://search.internal" {
+	if cfg.AIGate.Providers["gemini"].APIKey != "from-env" || cfg.Proxies["runbox"] != "http://runbox.internal" {
 		t.Fatalf("env not expanded: %+v %+v", cfg.AIGate.Providers, cfg.Proxies)
 	}
 }
@@ -73,6 +74,24 @@ func TestLoadConfig_UnsetEnvIsError(t *testing.T) {
 	_, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: \"${BOB_TEST_UNSET_KEY}\"}\n")
 	if err == nil || !strings.Contains(err.Error(), "BOB_TEST_UNSET_KEY") {
 		t.Fatalf("expected unset variable error, got %v", err)
+	}
+}
+
+func TestLoadConfig_SearchEnabledByCredentials(t *testing.T) {
+	t.Setenv("BOB_TEST_KAKAO", "kakao-key")
+	cfg, err := load(t, "search:\n  kakaoAPIKey: \"${BOB_TEST_KAKAO}\"\n  googleAPIKey: only-key-no-cx\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Search.Enabled() || cfg.Search.KakaoAPIKey != "kakao-key" {
+		t.Fatalf("search not enabled: %+v", cfg.Search)
+	}
+	out, err := RedactedYAML(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out, "kakao-key") || strings.Contains(out, "only-key-no-cx") {
+		t.Fatalf("search keys leaked: %s", out)
 	}
 }
 

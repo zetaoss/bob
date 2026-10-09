@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -22,6 +23,8 @@ type Config struct {
 	Server ServerConfig `yaml:"server"`
 	// AIGate enables /aigate when it lists models.
 	AIGate AIGateConfig `yaml:"aigate"`
+	// Search enables /search when at least one engine has credentials.
+	Search SearchConfig `yaml:"search"`
 	// Proxies maps a route name to an upstream base URL: /<name>/... is forwarded to <url>/...
 	Proxies map[string]string `yaml:"proxies,omitempty"`
 }
@@ -41,6 +44,20 @@ type AIGateConfig struct {
 // Enabled reports whether /aigate should be served.
 func (c AIGateConfig) Enabled() bool {
 	return len(c.Models) > 0
+}
+
+// SearchConfig holds search API credentials; an engine is used only when its credentials are set.
+type SearchConfig struct {
+	KakaoAPIKey       string `yaml:"kakaoAPIKey"`
+	NaverClientID     string `yaml:"naverClientID"`
+	NaverClientSecret string `yaml:"naverClientSecret"`
+	GoogleAPIKey      string `yaml:"googleAPIKey"`
+	GoogleCX          string `yaml:"googleCX"`
+}
+
+// Enabled reports whether /search should be served.
+func (c SearchConfig) Enabled() bool {
+	return c.KakaoAPIKey != "" || (c.NaverClientID != "" && c.NaverClientSecret != "") || (c.GoogleAPIKey != "" && c.GoogleCX != "")
 }
 
 type ProviderConfig struct {
@@ -71,8 +88,10 @@ func expandEnv(field, value string) (string, error) {
 	return out, nil
 }
 
-// routeName is a single path segment; "healthz" and "aigate" are served by bob itself.
+// routeName is a single path segment. Reserved names are served by bob itself.
 var routeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
+
+var reservedRoutes = []string{"aigate", "healthz", "search"}
 
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -107,13 +126,27 @@ func LoadConfig(path string) (*Config, error) {
 		return nil, err
 	}
 
+	for field, value := range map[string]*string{
+		"search.kakaoAPIKey":       &cfg.Search.KakaoAPIKey,
+		"search.naverClientID":     &cfg.Search.NaverClientID,
+		"search.naverClientSecret": &cfg.Search.NaverClientSecret,
+		"search.googleAPIKey":      &cfg.Search.GoogleAPIKey,
+		"search.googleCX":          &cfg.Search.GoogleCX,
+	} {
+		expanded, err := expandEnv(field, *value)
+		if err != nil {
+			return nil, err
+		}
+		*value = expanded
+	}
+
 	for name, target := range cfg.Proxies {
 		target, err := expandEnv("proxies."+name, target)
 		if err != nil {
 			return nil, err
 		}
 		cfg.Proxies[name] = target
-		if !routeName.MatchString(name) || name == "healthz" || name == "aigate" {
+		if !routeName.MatchString(name) || slices.Contains(reservedRoutes, name) {
 			return nil, fmt.Errorf("config proxies: invalid route name %q", name)
 		}
 		u, err := url.Parse(target)
@@ -122,8 +155,8 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	if !cfg.AIGate.Enabled() && len(cfg.Proxies) == 0 {
-		return nil, fmt.Errorf("config must enable aigate or define at least one proxy")
+	if !cfg.AIGate.Enabled() && !cfg.Search.Enabled() && len(cfg.Proxies) == 0 {
+		return nil, fmt.Errorf("config must enable aigate or search, or define at least one proxy")
 	}
 	return &cfg, nil
 }
@@ -179,6 +212,11 @@ func RedactedYAML(cfg *Config) (string, error) {
 			copyProvider.APIKey = "[redacted]"
 		}
 		redacted.AIGate.Providers[name] = copyProvider
+	}
+	for _, secret := range []*string{&redacted.Search.KakaoAPIKey, &redacted.Search.NaverClientSecret, &redacted.Search.GoogleAPIKey} {
+		if strings.TrimSpace(*secret) != "" {
+			*secret = "[redacted]"
+		}
 	}
 
 	var buf bytes.Buffer

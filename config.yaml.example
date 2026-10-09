@@ -22,9 +22,17 @@ aigate:
     ollama:
       apiKey: ${OLLAMA_API_KEY}
 
+# /search: result counts for 2-4 queries across search engines.
+# An engine is used only when its credentials are set; omit all to disable the route.
+search:
+  kakaoAPIKey: ${KAKAO_API_KEY}             # daum_blog
+  naverClientID: ${NAVER_CLIENT_ID}         # naver_blog, naver_news
+  naverClientSecret: ${NAVER_CLIENT_SECRET}
+  googleAPIKey: ${GOOGLE_SEARCH_KEY}        # google_search (Custom Search JSON API)
+  googleCX: ${GOOGLE_SEARCH_CX}
+
 # /<name>/... is forwarded to <url>/... (prefix stripped, query kept).
 proxies:
   prometheus: http://prometheus:9090
   runbox: http://runbox
-  search: http://search
   shellbox-score: http://shellbox-score
