@@ -1,0 +1,23 @@
+# Published tag of each image (UTC dates). The latest date in this file is the release:
+# on merge, images at that date that are not in the registry yet are built and pushed as <tag> and latest
+# (latex also as tex). Earlier entries are already published and are not touched.
+bash: 2026-01-06
+c: 2026-01-06
+cpp: 2026-01-06
+csharp: 2026-01-06
+go: 2026-10-09
+java: 2026-01-06
+kotlin: 2026-01-06
+latex: 2026-01-06
+lua: 2026-01-06
+mysql: 2026-01-06
+perl: 2026-01-06
+php: 2026-10-09
+powershell: 2026-01-06
+python: 2026-01-06
+python-notebook: 2025-06-29
+r: 2026-01-06
+r-notebook: 2025-06-29
+ruby: 2026-01-06
+sqlite3: 2026-01-06
+swift: 2026-01-06

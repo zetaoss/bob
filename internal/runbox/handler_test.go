@@ -63,7 +63,7 @@ func (f *fakeDocker) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		_, _ = io.WriteString(w, `{}`)
 	case r.Method == http.MethodPost && p == "/images/create":
-		if r.URL.Query().Get("tag") != "latest" {
+		if r.URL.Query().Get("tag") == "v1" {
 			_, _ = io.WriteString(w, `{"error":"unexpected tag"}`)
 			return
 		}
@@ -167,7 +167,7 @@ func TestServeHTTP_Lang(t *testing.T) {
 	if len(res.Images) != 1 || res.Images[0] != "QQ==" {
 		t.Fatalf("images: %v", res.Images)
 	}
-	if f.created.Image != "ghcr.io/zetaoss/runcontainers/python" || f.created.WorkingDir != "/home/user01" ||
+	if f.created.Image != langImage("python") || f.created.WorkingDir != "/home/user01" ||
 		f.created.Labels["bob.runbox"] != "1" || !f.created.HostConfig.AutoRemove || f.created.HostConfig.PidsLimit != 100 || f.created.Cmd[0] != "sleep" {
 		t.Fatalf("created: %+v", f.created)
 	}
@@ -253,7 +253,7 @@ func TestServeHTTP_DockerErrorIs500(t *testing.T) {
 func TestImagePull(t *testing.T) {
 	h := newTestHandler(t, &fakeDocker{})
 	ctx := context.Background()
-	// The fake accepts only the latest tag; a port in the registry host is not a tag.
+	// The fake rejects tag v1; a port in the registry host is not a tag (latest is pulled).
 	if err := h.box.docker.imagePull(ctx, "localhost:5000/img"); err != nil {
 		t.Fatal(err)
 	}

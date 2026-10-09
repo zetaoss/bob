@@ -113,7 +113,7 @@ func main() {
 			fatal(logger, "failed to initialize runbox", err)
 		}
 		mux.Handle("/runbox/", http.StripPrefix("/runbox", rb))
-		logger.Info("route", "path", "/runbox/", "handler", "runbox", "docker", cfg.Runbox.DockerHost)
+		logger.Info("route", "path", "/runbox/", "handler", "runbox", "docker", cfg.Runbox.DockerHost, "images", runbox.ImageTags())
 	}
 
 	names := make([]string, 0, len(cfg.Proxies))
