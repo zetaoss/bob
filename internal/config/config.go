@@ -27,6 +27,8 @@ type Config struct {
 	Search SearchConfig `yaml:"search"`
 	// Metrics enables /metrics/ when it lists queries.
 	Metrics MetricsConfig `yaml:"metrics"`
+	// Cloudflare enables /cloudflare/ when apiToken and zoneID are set.
+	Cloudflare CloudflareConfig `yaml:"cloudflare"`
 	// Proxies maps a route name to an upstream base URL: /<name>/... is forwarded to <url>/...
 	Proxies map[string]string `yaml:"proxies,omitempty"`
 }
@@ -46,6 +48,17 @@ type AIGateConfig struct {
 // Enabled reports whether /aigate should be served.
 func (c AIGateConfig) Enabled() bool {
 	return len(c.Models) > 0
+}
+
+// CloudflareConfig is the API token (Zone Analytics read) and zone for /cloudflare/analytics.
+type CloudflareConfig struct {
+	APIToken string `yaml:"apiToken"`
+	ZoneID   string `yaml:"zoneID"`
+}
+
+// Enabled reports whether /cloudflare/ should be served.
+func (c CloudflareConfig) Enabled() bool {
+	return c.APIToken != "" && c.ZoneID != ""
 }
 
 // MetricsConfig names PromQL instant queries that /metrics/ runs against a Prometheus-compatible API.
@@ -106,7 +119,7 @@ func expandEnv(field, value string) (string, error) {
 // routeName is a single path segment. Reserved names are served by bob itself.
 var routeName = regexp.MustCompile(`^[a-z0-9][a-z0-9-]*$`)
 
-var reservedRoutes = []string{"aigate", "healthz", "metrics", "search"}
+var reservedRoutes = []string{"aigate", "cloudflare", "healthz", "metrics", "search"}
 
 func LoadConfig(path string) (*Config, error) {
 	data, err := os.ReadFile(path)
@@ -147,6 +160,8 @@ func LoadConfig(path string) (*Config, error) {
 		"search.naverClientSecret": &cfg.Search.NaverClientSecret,
 		"search.googleAPIKey":      &cfg.Search.GoogleAPIKey,
 		"search.googleCX":          &cfg.Search.GoogleCX,
+		"cloudflare.apiToken":      &cfg.Cloudflare.APIToken,
+		"cloudflare.zoneID":        &cfg.Cloudflare.ZoneID,
 	} {
 		expanded, err := expandEnv(field, *value)
 		if err != nil {
@@ -185,8 +200,8 @@ func LoadConfig(path string) (*Config, error) {
 		}
 	}
 
-	if !cfg.AIGate.Enabled() && !cfg.Search.Enabled() && !cfg.Metrics.Enabled() && len(cfg.Proxies) == 0 {
-		return nil, fmt.Errorf("config must enable aigate, search or metrics, or define at least one proxy")
+	if !cfg.AIGate.Enabled() && !cfg.Search.Enabled() && !cfg.Metrics.Enabled() && !cfg.Cloudflare.Enabled() && len(cfg.Proxies) == 0 {
+		return nil, fmt.Errorf("config must enable aigate, search, metrics or cloudflare, or define at least one proxy")
 	}
 	return &cfg, nil
 }
@@ -243,7 +258,7 @@ func RedactedYAML(cfg *Config) (string, error) {
 		}
 		redacted.AIGate.Providers[name] = copyProvider
 	}
-	for _, secret := range []*string{&redacted.Search.KakaoAPIKey, &redacted.Search.NaverClientSecret, &redacted.Search.GoogleAPIKey} {
+	for _, secret := range []*string{&redacted.Search.KakaoAPIKey, &redacted.Search.NaverClientSecret, &redacted.Search.GoogleAPIKey, &redacted.Cloudflare.APIToken} {
 		if strings.TrimSpace(*secret) != "" {
 			*secret = "[redacted]"
 		}

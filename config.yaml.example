@@ -39,6 +39,11 @@ metrics:
     node_cpu_usage: sum by (node) (rate(node_cpu_usage_seconds_total[5m]))
     pod_count: count(count by (pod) (pod_memory_working_set_bytes{namespace="default"}))
 
+# /cloudflare/analytics: zone analytics per hour or day. Omit to disable.
+cloudflare:
+  apiToken: ${CLOUDFLARE_API_TOKEN}   # needs Zone Analytics read
+  zoneID: ${CLOUDFLARE_ZONE_ID}
+
 # /<name>/... is forwarded to <url>/... (prefix stripped, query kept).
 proxies:
   runbox: http://runbox

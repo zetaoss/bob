@@ -11,6 +11,7 @@ only zengine calls it.
 | `/aigate/` | bob: LLM routing with fallback across providers (moved from [aigate](https://github.com/zetaoss/aigate)) |
 | `/search/` | bob: result counts across search engines (moved from [queryhub](https://github.com/zetaoss/queryhub)) |
 | `/metrics/` | bob: named PromQL queries from the config, run against Prometheus |
+| `/cloudflare/` | bob: Cloudflare zone analytics per hour or day |
 | `/<name>/` | forwarded to the upstream configured under `proxies.<name>` |
 
 Forwarding strips the route prefix and keeps the rest of the path and the query:
@@ -34,10 +35,11 @@ See [`config.yaml.example`](config.yaml.example).
   The route is enabled when at least one engine is.
 - `metrics.queries` maps a name (lowercase letters, digits, `_`) to a PromQL instant query run against
   `metrics.prometheus`. The route is enabled when at least one query is set.
-- `proxies` maps a route name (lowercase letters, digits, `-`; not `healthz`, `aigate`, `metrics` or `search`) to an `http(s)` base URL.
+- `cloudflare` is enabled when `apiToken` (Zone Analytics read) and `zoneID` are set.
+- `proxies` maps a route name (lowercase letters, digits, `-`; not `healthz`, `aigate`, `cloudflare`, `metrics` or `search`) to an `http(s)` base URL.
 
 - Unknown keys are rejected, so a misspelled key fails at startup instead of being ignored.
-- `aigate.providers.*.apiKey`, `search.*` and `proxies` values may reference environment variables as `${NAME}`
+- `aigate.providers.*.apiKey`, `search.*`, `cloudflare.*` and `proxies` values may reference environment variables as `${NAME}`
   (an unset variable is a startup error). Keep secrets in the environment and the file in version control or a ConfigMap.
 
 Logs are JSON lines on stderr (`log/slog`). Every request except `/healthz` gets an access log with
@@ -88,6 +90,22 @@ Each metric is a list of samples (one per series of an instant vector, or one fo
 whose value is NaN or infinite are dropped, so an empty list means "no data". Write queries so the
 caller can use the samples directly: `sum by (node) (...)` for per-item values that callers can also
 sum, an aggregation for a single value.
+
+## cloudflare API
+
+`GET /cloudflare/analytics?interval=hour&since=<RFC3339>&until=<RFC3339>` and
+`GET /cloudflare/analytics?interval=day&since=<YYYY-MM-DD>&until=<YYYY-MM-DD>` (`until` exclusive) return
+the zone's HTTP request analytics per timeslot. Hourly ranges are queried in 24-hour windows.
+
+```json
+{"status":"ok","result":[{"timeslot":"2026-10-09T07:00:00Z","metrics":{
+ "uniq_uniques":"1234","sum_requests":"2.345678e+06","sum_countryMap":"[{\"bytes\":1,\"key\":\"KR\",\"requests\":2,\"threats\":0}]", ...}}]}
+```
+
+Metric values are text: numbers as Go's `%v` of the decoded JSON number, maps (browser, content
+type, TLS, country, IP class, status, threat pathing) as JSON. Names: `uniq_uniques`, `sum_requests`,
+`sum_pageViews`, `sum_bytes`, `sum_cachedBytes`, `sum_cachedRequests`, `sum_encryptedBytes`,
+`sum_encryptedRequests`, `sum_threats`, and `sum_<name>Map` for the maps.
 
 ## Development
 

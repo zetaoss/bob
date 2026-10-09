@@ -42,6 +42,7 @@ func TestLoadConfig_Rejects(t *testing.T) {
 		"reserved route":   "proxies:\n  aigate: http://x\n",
 		"reserved search":  "proxies:\n  search: http://x\n",
 		"reserved metrics": "proxies:\n  metrics: http://x\n",
+		"reserved cf":      "proxies:\n  cloudflare: http://x\n",
 		"metrics no url":   "metrics:\n  queries: {up: up}\n",
 		"metrics bad name": "metrics:\n  prometheus: http://p:9090\n  queries: {Node-CPU: up}\n",
 		"metrics empty":    "metrics:\n  prometheus: http://p:9090\n  queries: {up: \"\"}\n",

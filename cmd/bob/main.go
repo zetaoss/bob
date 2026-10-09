@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"bob/internal/aigate"
+	"bob/internal/cloudflare"
 	"bob/internal/config"
 	"bob/internal/logging"
 	"bob/internal/metrics"
@@ -82,6 +83,11 @@ func main() {
 		slices.Sort(metricNames)
 		mux.Handle("/metrics/", http.StripPrefix("/metrics", metrics.NewHandler(cfg.Metrics, logger)))
 		logger.Info("route", "path", "/metrics/", "handler", "metrics", "prometheus", cfg.Metrics.Prometheus, "metrics", metricNames)
+	}
+
+	if cfg.Cloudflare.Enabled() {
+		mux.Handle("/cloudflare/", http.StripPrefix("/cloudflare", cloudflare.NewHandler(cfg.Cloudflare, logger)))
+		logger.Info("route", "path", "/cloudflare/", "handler", "cloudflare")
 	}
 
 	names := make([]string, 0, len(cfg.Proxies))
