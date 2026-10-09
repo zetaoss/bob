@@ -39,11 +39,11 @@ See [`config.yaml.example`](config.yaml.example).
 - `cloudflare` is enabled when `apiToken` (Zone Analytics read) and `zoneID` are set.
 - `google.serviceAccount` is a service account key (JSON) with read access to the GA4 property
   (`gaPropertyID`, enables `/ga/`) and the Search Console site (`gscSiteURL`, enables `/gsc/`).
-  `gaTimezone` (default `UTC`) is the zone GA date/hour values are read in.
+  The GA property's time zone is read from GA's responses.
 - `proxies` maps a route name (lowercase letters, digits, `-`; not a built-in route) to an `http(s)` base URL.
 
 - Unknown keys are rejected, so a misspelled key fails at startup instead of being ignored.
-- `aigate.providers.*.apiKey`, `search.*`, `cloudflare.*`, `google.*` (except `gaTimezone`) and `proxies` values may reference environment variables as `${NAME}`
+- `aigate.providers.*.apiKey`, `search.*`, `cloudflare.*`, `google.*` and `proxies` values may reference environment variables as `${NAME}`
   (an unset variable is a startup error). Keep secrets in the environment and the file in version control or a ConfigMap.
 
 Logs are JSON lines on stderr (`log/slog`). Every request except `/healthz` gets an access log with
@@ -113,16 +113,19 @@ type, TLS, country, IP class, status, threat pathing) as JSON. Names: `uniq_uniq
 
 ## ga and gsc API
 
-`GET /ga/report?interval=hour|day&since=<YYYY-MM-DD>&until=<YYYY-MM-DD>` and
-`GET /gsc/query?interval=hour|day&since=...&until=...` (both dates inclusive) return one row per
-timeslot: RFC3339 UTC for `hour`, the date for `day`.
+`GET /ga/report?interval=hour|day&since=<RFC3339>&until=<RFC3339>` returns the hours starting in
+`[since, until)` (timeslot RFC3339 UTC), or the property-local dates overlapping it (timeslot
+`YYYY-MM-DD`). Dates (`since=YYYY-MM-DD&until=YYYY-MM-DD`, both inclusive, property-local) are also
+accepted. `GET /gsc/query?interval=hour|day&since=<YYYY-MM-DD>&until=<YYYY-MM-DD>` (both inclusive)
+returns RFC3339 UTC hours or Pacific dates.
 
 ```json
 {"status":"ok","result":[{"timeslot":"2026-10-09T07:00:00Z","sessions":5,"screen_page_views":9,"active_users":3}]}
 {"status":"ok","result":[{"timeslot":"2026-10-09T07:00:00Z","clicks":12,"impressions":340,"ctr":3.5294,"position":7.1235}]}
 ```
 
-GA hours are read in `gaTimezone`; Search Console hours are Pacific time. GSC `ctr` is a percentage;
+GA dates and hours are converted with the property's time zone from GA's response metadata;
+Search Console hours are Pacific time. GSC `ctr` is a percentage;
 `ctr` and `position` are rounded to 4 decimals. Access tokens are reused until shortly before they expire.
 
 ## Development

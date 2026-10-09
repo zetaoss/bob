@@ -64,11 +64,10 @@ func (c CloudflareConfig) Enabled() bool {
 }
 
 // GoogleConfig is a service account (JSON) with read access to a GA4 property and a Search
-// Console site. GATimezone is the zone GA date/hour values are read in (default UTC).
+// Console site. The GA property's time zone is read from GA's responses.
 type GoogleConfig struct {
 	ServiceAccount string `yaml:"serviceAccount"`
 	GAPropertyID   string `yaml:"gaPropertyID"`
-	GATimezone     string `yaml:"gaTimezone"`
 	GSCSiteURL     string `yaml:"gscSiteURL"`
 }
 

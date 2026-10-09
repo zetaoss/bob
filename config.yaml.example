@@ -48,7 +48,6 @@ cloudflare:
 google:
   serviceAccount: ${GOOGLE_SERVICE_ACCOUNT}   # service account key JSON
   gaPropertyID: "123456789"
-  gaTimezone: UTC                             # zone GA date/hour values are read in
   gscSiteURL: sc-domain:example.com
 
 # /<name>/... is forwarded to <url>/... (prefix stripped, query kept).

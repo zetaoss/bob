@@ -94,6 +94,43 @@ func TestGA(t *testing.T) {
 	}
 }
 
+func TestGAPropertyTimeZone(t *testing.T) {
+	// GA reports KST dates/hours; 2026-10-09 07:00 KST is 2026-10-08 22:00 UTC.
+	ga := `{"metadata":{"timeZone":"Asia/Seoul"},"rows":[
+	 {"dimensionValues":[{"value":"20261009"},{"value":"06"}],"metricValues":[{"value":"1"},{"value":"1"},{"value":"1"},{"value":"1"}]},
+	 {"dimensionValues":[{"value":"20261009"},{"value":"07"}],"metricValues":[{"value":"2"},{"value":"2"},{"value":"2"},{"value":"2"}]},
+	 {"dimensionValues":[{"value":"20261009"},{"value":"08"}],"metricValues":[{"value":"3"},{"value":"3"},{"value":"3"},{"value":"3"}]}]}`
+	h, f := newTestHandler(t, ga, "")
+
+	code, body := get(t, h.GA(), "/report?interval=hour&since=2026-10-08T22:00:00Z&until=2026-10-08T23:00:00Z")
+	if code != http.StatusOK || body != `{"status":"ok","result":[{"timeslot":"2026-10-08T22:00:00Z","sessions":2,"screen_page_views":2,"active_users":2}]}` {
+		t.Fatalf("instants: code=%d body=%s", code, body)
+	}
+	ranges := f.lastBody["dateRanges"].([]any)[0].(map[string]any)
+	if ranges["startDate"] != "2026-10-07" || ranges["endDate"] != "2026-10-09" {
+		t.Errorf("date range with margin = %v", ranges)
+	}
+
+	code, body = get(t, h.GA(), "/report?interval=hour&since=2026-10-09&until=2026-10-09")
+	if code != http.StatusOK || !strings.Contains(body, `"timeslot":"2026-10-08T21:00:00Z"`) || !strings.Contains(body, `"timeslot":"2026-10-08T23:00:00Z"`) {
+		t.Errorf("dates: code=%d body=%s", code, body)
+	}
+
+	days := `{"metadata":{"timeZone":"Asia/Seoul"},"rows":[
+	 {"dimensionValues":[{"value":"20261007"}],"metricValues":[{"value":"1"},{"value":"1"},{"value":"1"},{"value":"1"}]},
+	 {"dimensionValues":[{"value":"20261008"}],"metricValues":[{"value":"2"},{"value":"2"},{"value":"2"},{"value":"2"}]},
+	 {"dimensionValues":[{"value":"20261009"}],"metricValues":[{"value":"3"},{"value":"3"},{"value":"3"},{"value":"3"}]}]}`
+	h2, _ := newTestHandler(t, days, "")
+	// [2026-10-07T20:00Z, 2026-10-08T12:00Z) is 10-08 05:00 to 21:00 KST: only the 10-08 date overlaps.
+	code, body = get(t, h2.GA(), "/report?interval=day&since=2026-10-07T20:00:00Z&until=2026-10-08T12:00:00Z")
+	if code != http.StatusOK || body != `{"status":"ok","result":[{"timeslot":"2026-10-08","sessions":2,"screen_page_views":2,"active_users":2}]}` {
+		t.Errorf("day instants: code=%d body=%s", code, body)
+	}
+	if code, _ := get(t, h2.GA(), "/report?interval=day&since=2026-10-08T12:00:00Z&until=2026-10-07T20:00:00Z"); code != http.StatusBadRequest {
+		t.Errorf("reversed instants: code=%d", code)
+	}
+}
+
 func TestGSC(t *testing.T) {
 	gsc := `{"rows":[{"keys":["2026-10-09T00:00:00-07:00"],"clicks":12,"impressions":340,"ctr":0.0352941176,"position":7.123456}]}`
 	h, f := newTestHandler(t, "", gsc)

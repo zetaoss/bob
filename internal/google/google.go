@@ -22,7 +22,7 @@ const (
 	gscScope = "https://www.googleapis.com/auth/webmasters.readonly"
 )
 
-// GARow is one GA4 timeslot: RFC3339 UTC for hour, YYYY-MM-DD for day.
+// GARow is one GA4 timeslot: RFC3339 UTC for hour, the property's local date (YYYY-MM-DD) for day.
 type GARow struct {
 	Timeslot        string `json:"timeslot"`
 	Sessions        int    `json:"sessions"`
@@ -43,7 +43,6 @@ type GSCRow struct {
 type Handler struct {
 	tokens     *tokenSource
 	propertyID string
-	gaLoc      *time.Location
 	siteURL    string
 	gaURL      string
 	gscURL     string
@@ -59,19 +58,10 @@ func NewHandler(cfg config.GoogleConfig, log *slog.Logger) (*Handler, error) {
 	if err != nil {
 		return nil, err
 	}
-	tz := cfg.GATimezone
-	if tz == "" {
-		tz = "UTC"
-	}
-	loc, err := time.LoadLocation(tz)
-	if err != nil {
-		return nil, fmt.Errorf("google.gaTimezone: %w", err)
-	}
 	client := &http.Client{Timeout: 20 * time.Second}
 	return &Handler{
 		tokens:     &tokenSource{sa: sa, key: key, client: client},
 		propertyID: cfg.GAPropertyID,
-		gaLoc:      loc,
 		siteURL:    cfg.GSCSiteURL,
 		gaURL:      "https://analyticsdata.googleapis.com/v1beta/properties/",
 		gscURL:     "https://searchconsole.googleapis.com/webmasters/v3/sites/",
@@ -86,21 +76,43 @@ type response struct {
 	Error  string `json:"error,omitempty"`
 }
 
-// GA serves GET /report?interval=hour|day&since=<YYYY-MM-DD>&until=<YYYY-MM-DD> (both inclusive).
+// GA serves GET /report?interval=hour|day&since=<RFC3339>&until=<RFC3339>: hours starting in
+// [since, until), or the property-local dates overlapping it. Dates (YYYY-MM-DD, both inclusive,
+// property-local) are also accepted. The property's time zone comes from the GA response.
 func (h *Handler) GA() http.Handler {
-	return h.route("/report", h.propertyID != "", func(ctx context.Context, interval string, since, until time.Time) (any, error) {
-		return h.gaReport(ctx, interval, since, until)
+	return h.route("/report", h.propertyID != "", func(ctx context.Context, interval, since, until string) (any, int, error) {
+		if s, err1 := time.Parse(time.RFC3339, since); err1 == nil {
+			u, err2 := time.Parse(time.RFC3339, until)
+			if err2 != nil || !s.Before(u) {
+				return nil, http.StatusBadRequest, fmt.Errorf("need RFC3339 since < until")
+			}
+			rows, err := h.gaReport(ctx, interval, s, u, true)
+			return rows, http.StatusBadGateway, err
+		}
+		s, err1 := time.Parse(time.DateOnly, since)
+		u, err2 := time.Parse(time.DateOnly, until)
+		if err1 != nil || err2 != nil || u.Before(s) {
+			return nil, http.StatusBadRequest, fmt.Errorf("need RFC3339 since < until or YYYY-MM-DD since <= until")
+		}
+		rows, err := h.gaReport(ctx, interval, s, u, false)
+		return rows, http.StatusBadGateway, err
 	})
 }
 
 // GSC serves GET /query?interval=hour|day&since=<YYYY-MM-DD>&until=<YYYY-MM-DD> (both inclusive).
 func (h *Handler) GSC() http.Handler {
-	return h.route("/query", h.siteURL != "", func(ctx context.Context, interval string, since, until time.Time) (any, error) {
-		return h.gscQuery(ctx, interval, since, until)
+	return h.route("/query", h.siteURL != "", func(ctx context.Context, interval, since, until string) (any, int, error) {
+		s, err1 := time.Parse(time.DateOnly, since)
+		u, err2 := time.Parse(time.DateOnly, until)
+		if err1 != nil || err2 != nil || u.Before(s) {
+			return nil, http.StatusBadRequest, fmt.Errorf("need YYYY-MM-DD since <= until")
+		}
+		rows, err := h.gscQuery(ctx, interval, s, u)
+		return rows, http.StatusBadGateway, err
 	})
 }
 
-func (h *Handler) route(path string, enabled bool, run func(context.Context, string, time.Time, time.Time) (any, error)) http.Handler {
+func (h *Handler) route(path string, enabled bool, run func(ctx context.Context, interval, since, until string) (any, int, error)) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != path || !enabled {
 			writeJSON(w, http.StatusNotFound, response{Status: "error", Error: "not found"})
@@ -112,23 +124,30 @@ func (h *Handler) route(path string, enabled bool, run func(context.Context, str
 		}
 		q := r.URL.Query()
 		interval := q.Get("interval")
-		since, err1 := time.Parse(time.DateOnly, q.Get("since"))
-		until, err2 := time.Parse(time.DateOnly, q.Get("until"))
-		if (interval != "hour" && interval != "day") || err1 != nil || err2 != nil || until.Before(since) {
-			writeJSON(w, http.StatusBadRequest, response{Status: "error", Error: "need interval=hour|day and YYYY-MM-DD since <= until"})
+		if interval != "hour" && interval != "day" {
+			writeJSON(w, http.StatusBadRequest, response{Status: "error", Error: "interval must be hour or day"})
 			return
 		}
-		result, err := run(r.Context(), interval, since, until)
+		result, status, err := run(r.Context(), interval, q.Get("since"), q.Get("until"))
 		if err != nil {
-			h.log.Error("google report failed", "path", path, "err", err)
-			writeJSON(w, http.StatusBadGateway, response{Status: "error", Error: err.Error()})
+			if status != http.StatusBadRequest {
+				h.log.Error("google report failed", "path", path, "err", err)
+			}
+			writeJSON(w, status, response{Status: "error", Error: err.Error()})
 			return
 		}
 		writeJSON(w, http.StatusOK, response{Status: "ok", Result: result})
 	})
 }
 
-func (h *Handler) gaReport(ctx context.Context, interval string, since, until time.Time) ([]GARow, error) {
+// gaReport queries GA4. With instants, it asks for the surrounding UTC dates (a day of margin
+// covers any time zone) and keeps the hours starting in [since, until), or the local dates
+// overlapping it; with dates, it returns every row for those property-local dates.
+func (h *Handler) gaReport(ctx context.Context, interval string, since, until time.Time, instants bool) ([]GARow, error) {
+	startDate, endDate := since, until
+	if instants {
+		startDate, endDate = since.UTC().AddDate(0, 0, -1), until.UTC().AddDate(0, 0, 1)
+	}
 	dims := []map[string]string{{"name": "date"}}
 	layout := "20060102"
 	if interval == "hour" {
@@ -136,19 +155,30 @@ func (h *Handler) gaReport(ctx context.Context, interval string, since, until ti
 		layout = "20060102 15"
 	}
 	var payload struct {
+		Metadata struct {
+			TimeZone string `json:"timeZone"`
+		} `json:"metadata"`
 		Rows []struct {
 			DimensionValues []struct{ Value string } `json:"dimensionValues"`
 			MetricValues    []struct{ Value string } `json:"metricValues"`
 		} `json:"rows"`
 	}
 	err := h.post(ctx, gaScope, h.gaURL+h.propertyID+":runReport", map[string]any{
-		"dateRanges":    []map[string]string{{"startDate": since.Format(time.DateOnly), "endDate": until.Format(time.DateOnly)}},
+		"dateRanges":    []map[string]string{{"startDate": startDate.Format(time.DateOnly), "endDate": endDate.Format(time.DateOnly)}},
 		"dimensions":    dims,
 		"metrics":       []map[string]string{{"name": "sessions"}, {"name": "screenPageViews"}, {"name": "totalUsers"}, {"name": "activeUsers"}},
 		"keepEmptyRows": true,
 	}, &payload)
 	if err != nil {
 		return nil, fmt.Errorf("ga api: %w", err)
+	}
+	loc := time.UTC
+	if payload.Metadata.TimeZone != "" {
+		if l, err := time.LoadLocation(payload.Metadata.TimeZone); err == nil {
+			loc = l
+		} else {
+			h.log.Error("unknown GA property time zone; using UTC", "timeZone", payload.Metadata.TimeZone)
+		}
 	}
 	rows := []GARow{}
 	for _, r := range payload.Rows {
@@ -159,9 +189,18 @@ func (h *Handler) gaReport(ctx context.Context, interval string, since, until ti
 		for i, d := range r.DimensionValues {
 			parts[i] = d.Value
 		}
-		t, err := time.ParseInLocation(layout, strings.Join(parts, " "), h.gaLoc)
+		t, err := time.ParseInLocation(layout, strings.Join(parts, " "), loc)
 		if err != nil {
 			continue
+		}
+		if instants {
+			end := t.Add(time.Hour)
+			if interval == "day" {
+				end = t.AddDate(0, 0, 1)
+			}
+			if interval == "hour" && (t.Before(since) || !t.Before(until)) || interval == "day" && (!t.Before(until) || !end.After(since)) {
+				continue
+			}
 		}
 		timeslot := t.Format(time.DateOnly)
 		if interval == "hour" {
