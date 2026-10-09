@@ -152,7 +152,7 @@ func langBoxOpts(in LangInput) (boxOpts, error) {
 		images = 2
 	}
 	return boxOpts{
-		Image:         langImagePrefix + in.Lang,
+		Image:         langImage(in.Lang),
 		Command:       l.command,
 		Shell:         l.shell,
 		Env:           l.env,
