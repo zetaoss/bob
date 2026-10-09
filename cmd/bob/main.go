@@ -18,8 +18,8 @@ import (
 
 	"bob/internal/aigate"
 	"bob/internal/config"
-	"bob/internal/k8s"
 	"bob/internal/logging"
+	"bob/internal/metrics"
 	"bob/internal/proxy"
 	"bob/internal/search"
 )
@@ -74,9 +74,14 @@ func main() {
 		logger.Info("route", "path", "/search/", "handler", "search", "engines", engineNames)
 	}
 
-	if cfg.K8s.Enabled() {
-		mux.Handle("/k8s/", http.StripPrefix("/k8s", k8s.NewHandler(cfg.K8s, logger)))
-		logger.Info("route", "path", "/k8s/", "handler", "k8s", "prometheus", cfg.K8s.Prometheus, "nodepool", cfg.K8s.Nodepool, "namespace", cfg.K8s.Namespace, "pvc", cfg.K8s.PVC)
+	if cfg.Metrics.Enabled() {
+		metricNames := make([]string, 0, len(cfg.Metrics.Queries))
+		for name := range cfg.Metrics.Queries {
+			metricNames = append(metricNames, name)
+		}
+		slices.Sort(metricNames)
+		mux.Handle("/metrics/", http.StripPrefix("/metrics", metrics.NewHandler(cfg.Metrics, logger)))
+		logger.Info("route", "path", "/metrics/", "handler", "metrics", "prometheus", cfg.Metrics.Prometheus, "metrics", metricNames)
 	}
 
 	names := make([]string, 0, len(cfg.Proxies))

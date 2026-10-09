@@ -10,7 +10,7 @@ only zengine calls it.
 | `/healthz` | bob |
 | `/aigate/` | bob: LLM routing with fallback across providers (moved from [aigate](https://github.com/zetaoss/aigate)) |
 | `/search/` | bob: result counts across search engines (moved from [queryhub](https://github.com/zetaoss/queryhub)) |
-| `/k8s/` | bob: node, pod, PVC and zeta-defender metrics from Prometheus |
+| `/metrics/` | bob: named PromQL queries from the config, run against Prometheus |
 | `/<name>/` | forwarded to the upstream configured under `proxies.<name>` |
 
 Forwarding strips the route prefix and keeps the rest of the path and the query:
@@ -32,8 +32,9 @@ See [`config.yaml.example`](config.yaml.example).
 - `search` holds search API credentials. Each engine is used only when its credentials are set
   (`daum_blog`: Kakao key; `naver_blog`, `naver_news`: Naver client ID and secret; `google_search`: Google API key and CX).
   The route is enabled when at least one engine is.
-- `k8s` is enabled when `k8s.prometheus` is set; `nodepool`, `namespace` and `pvc` are then required.
-- `proxies` maps a route name (lowercase letters, digits, `-`; not `healthz`, `aigate`, `k8s` or `search`) to an `http(s)` base URL.
+- `metrics.queries` maps a name (lowercase letters, digits, `_`) to a PromQL instant query run against
+  `metrics.prometheus`. The route is enabled when at least one query is set.
+- `proxies` maps a route name (lowercase letters, digits, `-`; not `healthz`, `aigate`, `metrics` or `search`) to an `http(s)` base URL.
 
 - Unknown keys are rejected, so a misspelled key fails at startup instead of being ignored.
 - `aigate.providers.*.apiKey`, `search.*` and `proxies` values may reference environment variables as `${NAME}`
@@ -70,23 +71,21 @@ count of each query on each engine. Engines are queried in parallel; if any call
 
 `values[i][j]` is the count for query `i` on engine `j`. Google wraps the query in double quotes (exact match).
 
-## k8s API
+## metrics API
 
-`GET /k8s/metrics[?time=<RFC3339>]` returns resource usage at `time` (default: now). CPU is in
-cores, memory and storage in bytes.
+`GET /metrics/[?time=<RFC3339>]` runs every configured query at `time` (default: now);
+`GET /metrics/<name>` runs one. Queries run in parallel; if any fails, the response is `502`.
 
 ```json
-{"status":"ok","result":{"nodepool":"pool2","namespace":"prod3",
- "nodes":[{"name":"...","cpu_usage":0.88,"cpu_allocatable":1.93,"memory_usage":8576364544,"memory_allocatable":13918404608}],
- "pods":[{"name":"...","namespace":"prod3","cpu_usage":0.12,"memory_usage":524288000}],
- "pvcs":[{"name":"db","namespace":"prod3","usage":43832832000,"capacity":52723159040,"usage_percent":83.1}],
- "defender":{"fighting_ratio":0,"max_level":0}}}
+{"status":"ok","time":"2026-10-09T07:00:00Z","result":{
+ "node_cpu_usage":[{"labels":{"node":"node-1"},"value":0.88}],
+ "pod_count":[{"labels":{},"value":10}]}}
 ```
 
-Nodes are those whose name contains the node pool; pods are those in the namespace. Node, pod and
-zeta-defender queries are best effort (a failed query leaves zeros); a missing PVC usage or capacity is
-a `502`. `defender` is the share of the last hour spent in Under Attack mode and the highest level
-reached (from `zeta_defender_fighting_seconds_total` and `zeta_defender_level`).
+Each metric is a list of samples (one per series of an instant vector, or one for a scalar). Samples
+whose value is NaN or infinite are dropped, so an empty list means "no data". Write queries so the
+caller can use the samples directly: `sum by (node) (...)` for per-item values that callers can also
+sum, an aggregation for a single value.
 
 ## Development
 

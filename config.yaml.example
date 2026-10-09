@@ -31,13 +31,13 @@ search:
   googleAPIKey: ${GOOGLE_SEARCH_KEY}        # google_search (Custom Search JSON API)
   googleCX: ${GOOGLE_SEARCH_CX}
 
-# /k8s: resource usage of one node pool, and pods and one PVC of one namespace, plus
-# zeta-defender activity, read from a Prometheus-compatible query API. Omit to disable.
-k8s:
+# /metrics/: named PromQL instant queries run against a Prometheus-compatible API.
+# Names use lowercase letters, digits and _. Omit queries to disable the route.
+metrics:
   prometheus: http://prometheus:9090
-  nodepool: default-pool
-  namespace: default
-  pvc: data
+  queries:
+    node_cpu_usage: sum by (node) (rate(node_cpu_usage_seconds_total[5m]))
+    pod_count: count(count by (pod) (pod_memory_working_set_bytes{namespace="default"}))
 
 # /<name>/... is forwarded to <url>/... (prefix stripped, query kept).
 proxies:
