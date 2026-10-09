@@ -22,7 +22,7 @@ Unknown routes return `404`; an unreachable upstream returns `502`.
 
 ## Configuration
 
-See [`config.yaml.example`](config.yaml.example).
+See [`config.example.yaml`](config.example.yaml).
 
 - `server.port` defaults to `8080`. `server.logLevel` is `debug`, `info` (default) or `error`; `debug` prints upstream provider requests and responses.
 - `aigate` is enabled when `aigate.models` is non-empty.
@@ -131,7 +131,7 @@ Search Console hours are Pacific time. GSC `ctr` is a percentage;
 ## Development
 
 ```sh
-cp config.yaml.example config.yaml   # config.yaml and .env are git-ignored
+cp config.example.yaml config.yaml   # config.yaml and .env are git-ignored
 echo 'GEMINI_API_KEY=...' >> .env    # variables referenced as ${NAME} in config.yaml
 make run                             # loads .env, then go run ./cmd/bob -config config.yaml
 make test                            # go vet + go test
