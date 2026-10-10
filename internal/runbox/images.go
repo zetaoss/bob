@@ -5,7 +5,7 @@ import "regexp"
 // runcontainersVersion is the github.com/zetaoss/runcontainers release whose images bob runs: each release
 // publishes every image as <lang>:<version> (tex from the latex image). Set it to a newer release to run
 // newer images; the images are then fixed by the bob release.
-const runcontainersVersion = "v0.2.0"
+const runcontainersVersion = "v0.3.0"
 
 var versionRE = regexp.MustCompile(`^v[0-9]+\.[0-9]+\.[0-9]+$`)
 
