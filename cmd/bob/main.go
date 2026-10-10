@@ -166,8 +166,8 @@ func main() {
 	}
 }
 
-// pullImages pulls the runbox images. Failures are logged but do not fail the command: in an init container
-// they would keep bob, and its other features, from starting; an image not pulled is pulled on first use.
+// pullImages pulls the runbox images and exits non-zero if any is not pulled, so an init container running it
+// keeps bob from starting until the Docker host has every image.
 func pullImages(cfg *config.Config, logger *slog.Logger) {
 	if !cfg.Runbox.Enabled() {
 		logger.Info("runbox is disabled: no images to pull")
@@ -178,7 +178,7 @@ func pullImages(cfg *config.Config, logger *slog.Logger) {
 	start := time.Now()
 	logger.Info("pulling runbox images", "runcontainers", runbox.RuncontainersVersion(), "images", len(runbox.Images()))
 	if err := runbox.PullImages(ctx, cfg.Runbox, logger); err != nil {
-		logger.Error("some runbox images were not pulled; they are pulled on first use", "err", err)
+		fatal(logger, "failed to pull runbox images", err)
 	}
 	logger.Info("pulled runbox images", "seconds", int(time.Since(start).Seconds()))
 }
