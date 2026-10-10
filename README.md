@@ -148,7 +148,9 @@ curl -X POST http://localhost:8080/runbox/notebook -d '{"lang":"python","sources
   at the [runcontainers](https://github.com/zetaoss/runcontainers) release in `runcontainersVersion`
   ([`internal/runbox/images.go`](internal/runbox/images.go)). Set it to a newer release and release bob to run
   newer images. Notebooks use `<lang>-notebook` (`python-notebook`, `r-notebook`) of the same release.
-  Images are pulled on first use, so a new version is pulled on the first run after a release.
+  Images are pulled on first use. `bob -config config.yaml pull-images` pulls every runbox image the Docker host
+  does not have yet and exits; run it in an init container so the first run after a release does not wait for a
+  pull. It exits non-zero if any image is not pulled, so bob does not start until the Docker host has them all.
 - `files[].name` defaults to `runbox.<ext>`; files with the same name are joined. `main` is the index of the
   file php and r may rewrite (php adds `<?php` and the autoloader; r draws plots to PNG).
 - Each log is the stream (`1` stdout, `2` stderr) followed by the line. Up to 2 PNG files (10 for LaTeX) of at

@@ -29,7 +29,17 @@ import (
 
 func main() {
 	configPath := flag.String("config", "config.yaml", "Path to YAML config")
+	flag.Usage = func() {
+		fmt.Fprintf(flag.CommandLine.Output(), "usage: bob [-config file] [pull-images]\n\n"+
+			"Without a command, bob serves HTTP. pull-images pulls the runbox images the Docker host does not\n"+
+			"have yet and exits (run it in an init container before bob serves /runbox/).\n\n")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
+	if flag.NArg() > 1 || (flag.NArg() == 1 && flag.Arg(0) != "pull-images") {
+		flag.Usage()
+		os.Exit(2)
+	}
 
 	cfg, err := config.LoadConfig(*configPath)
 	if err != nil {
@@ -43,6 +53,11 @@ func main() {
 		fatal(logger, "failed to render startup config", err)
 	}
 	logger.Info("loaded config", "config", redactedCfg)
+
+	if flag.Arg(0) == "pull-images" {
+		pullImages(cfg, logger)
+		return
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -149,6 +164,23 @@ func main() {
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		fatal(logger, "server error", err)
 	}
+}
+
+// pullImages pulls the runbox images and exits non-zero if any is not pulled, so an init container running it
+// keeps bob from starting until the Docker host has every image.
+func pullImages(cfg *config.Config, logger *slog.Logger) {
+	if !cfg.Runbox.Enabled() {
+		logger.Info("runbox is disabled: no images to pull")
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	start := time.Now()
+	logger.Info("pulling runbox images", "runcontainers", runbox.RuncontainersVersion(), "images", len(runbox.Images()))
+	if err := runbox.PullImages(ctx, cfg.Runbox, logger); err != nil {
+		fatal(logger, "failed to pull runbox images", err)
+	}
+	logger.Info("pulled runbox images", "seconds", int(time.Since(start).Seconds()))
 }
 
 func fatal(l *slog.Logger, msg string, err error) {
