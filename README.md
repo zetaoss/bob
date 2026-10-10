@@ -144,11 +144,11 @@ curl -X POST http://localhost:8080/runbox/notebook -d '{"lang":"python","sources
 ```
 
 - Languages: `bash`, `c`, `cpp`, `csharp`, `go`, `java`, `kotlin`, `latex`/`tex`, `lua`, `mysql`, `perl`,
-  `php`, `powershell`, `python`, `r`, `ruby`, `sqlite3`. Images are `ghcr.io/zetaoss/runcontainers/<lang>:<tag>`
-  with the tag from [`internal/runbox/tags.yaml`](internal/runbox/tags.yaml), a copy of `tags.yaml` in
-  [runcontainers](https://github.com/zetaoss/runcontainers) (`tex` uses the `latex` tag; unlisted: `latest`).
-  Copy it from there and release bob to run newer images. Notebooks use `jmnote/runbox:<lang>-notebook`.
-  Images are pulled on first use, so a new tag is pulled on the first run after a release.
+  `php`, `powershell`, `python`, `r`, `ruby`, `sqlite3`. Images are `ghcr.io/zetaoss/runcontainers/<lang>:<version>`
+  at the [runcontainers](https://github.com/zetaoss/runcontainers) release in `runcontainersVersion`
+  ([`internal/runbox/images.go`](internal/runbox/images.go)). Set it to a newer release and release bob to run
+  newer images. Notebooks use `jmnote/runbox:<lang>-notebook`.
+  Images are pulled on first use, so a new version is pulled on the first run after a release.
 - `files[].name` defaults to `runbox.<ext>`; files with the same name are joined. `main` is the index of the
   file php and r may rewrite (php adds `<?php` and the autoloader; r draws plots to PNG).
 - Each log is the stream (`1` stdout, `2` stderr) followed by the line. Up to 2 PNG files (10 for LaTeX) of at

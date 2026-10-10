@@ -12,7 +12,7 @@ func TestLangBoxOpts_Defaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Image != "ghcr.io/zetaoss/runcontainers/python:"+imageTags["python"] || opts.Command != "python runbox.py" || opts.Shell != "sh" ||
+	if opts.Image != "ghcr.io/zetaoss/runcontainers/python:"+runcontainersVersion || opts.Command != "python runbox.py" || opts.Shell != "sh" ||
 		opts.WorkingDir != "/home/user01" || opts.Timeout != 10*time.Second || opts.CollectImages != 2 || !opts.CollectStats {
 		t.Fatalf("unexpected opts: %+v", opts)
 	}
