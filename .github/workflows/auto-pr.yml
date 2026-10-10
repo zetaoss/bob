@@ -93,10 +93,12 @@ jobs:
               return;
             }
 
-            const prTitle = headCommitMessage
-              .split('\n')[0]
-              .trim();
-            const prBody = [
+            // A new PR takes the head commit's subject as its title and the commit body as its description.
+            // An existing PR keeps its title and description: later pushes must not overwrite text written
+            // on the PR.
+            const [subject, ...bodyLines] = headCommitMessage.split('\n');
+            const prTitle = subject.trim();
+            const prBody = bodyLines.join('\n').trim() || [
               'This PR was created automatically on push.',
               '',
               `- Head: \`${headBranch}\``,
@@ -115,19 +117,12 @@ jobs:
 
             if (existing.data.length > 0) {
               const pr = existing.data[0];
-              await github.rest.pulls.update({
-                owner,
-                repo,
-                pull_number: pr.number,
-                title: prTitle,
-                body: prBody
-              });
               try {
                 await retry(3, 5000, () => ensureAssignee(pr.number, context.actor));
               } catch (e) {
                 core.warning(`Assignee step skipped (status=${e?.status ?? 'unknown'})`);
               }
-              core.info(`Updated PR #${pr.number}`);
+              core.info(`PR #${pr.number} exists; title and description kept`);
               return;
             }
 
