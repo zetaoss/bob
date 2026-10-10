@@ -110,7 +110,7 @@ func TestNotebookBoxOpts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if opts.Image != "jmnote/runbox:python-notebook" || opts.Files[0].Name != "/tmp/runbox.ipynb" || opts.CollectImages != 0 {
+	if opts.Image != "ghcr.io/zetaoss/runcontainers/python-notebook:"+runcontainersVersion || opts.Files[0].Name != "/tmp/runbox.ipynb" || opts.CollectImages != 0 {
 		t.Fatalf("unexpected opts: %+v", opts)
 	}
 	var nb struct {

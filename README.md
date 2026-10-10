@@ -147,7 +147,7 @@ curl -X POST http://localhost:8080/runbox/notebook -d '{"lang":"python","sources
   `php`, `powershell`, `python`, `r`, `ruby`, `sqlite3`. Images are `ghcr.io/zetaoss/runcontainers/<lang>:<version>`
   at the [runcontainers](https://github.com/zetaoss/runcontainers) release in `runcontainersVersion`
   ([`internal/runbox/images.go`](internal/runbox/images.go)). Set it to a newer release and release bob to run
-  newer images. Notebooks use `jmnote/runbox:<lang>-notebook`.
+  newer images. Notebooks use `<lang>-notebook` (`python-notebook`, `r-notebook`) of the same release.
   Images are pulled on first use, so a new version is pulled on the first run after a release.
 - `files[].name` defaults to `runbox.<ext>`; files with the same name are joined. `main` is the index of the
   file php and r may rewrite (php adds `<?php` and the autoloader; r draws plots to PNG).

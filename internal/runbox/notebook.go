@@ -74,7 +74,7 @@ func notebookBoxOpts(in NotebookInput) (boxOpts, error) {
 		return boxOpts{}, err
 	}
 	return boxOpts{
-		Image:        "jmnote/runbox:" + in.Lang + "-notebook",
+		Image:        langImage(in.Lang + "-notebook"),
 		Command:      "jupyter nbconvert --execute --to notebook --allow-errors --stdout " + notebookPath,
 		Shell:        "sh",
 		Files:        []File{{Name: notebookPath, Body: string(body)}},

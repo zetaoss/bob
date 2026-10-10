@@ -209,7 +209,7 @@ func TestServeHTTP_Notebook(t *testing.T) {
 	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Body.String(), want) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if f.created.Image != "jmnote/runbox:python-notebook" {
+	if f.created.Image != langImage("python-notebook") {
 		t.Fatalf("created: %+v", f.created)
 	}
 }
