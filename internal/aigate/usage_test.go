@@ -45,6 +45,13 @@ func TestParseQuotaError(t *testing.T) {
 		t.Fatalf("unexpected per-minute quota error: %+v", q)
 	}
 
+	// A daily token quota exhausts the model for the day but is not a request count.
+	tokensPerDay := `{"error":{"details":[{"violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_input_token_count","quotaId":"GenerateContentInputTokensPerModelPerDay-FreeTier","quotaValue":"250000"}]}]}}`
+	q = parseQuotaError([]byte(tokensPerDay))
+	if !q.daily || q.limit != 0 {
+		t.Fatalf("expected a daily cooldown without a request limit, got %+v", q)
+	}
+
 	if q := parseQuotaError([]byte("not json")); q.daily || q.retryDelay != 0 {
 		t.Fatalf("expected empty quota error, got %+v", q)
 	}
@@ -56,7 +63,7 @@ func TestUsageTrackerQuotaDay(t *testing.T) {
 	routes := map[string]ModelRoute{"gemini/a": {Provider: "gemini"}}
 
 	u.record("gemini/a", nil, nil)
-	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusTooManyRequests, Err: errors.New("quota"), Body: []byte(`{"error":{"details":[{"violations":[{"quotaId":"PerDay","quotaValue":"20"}]}]}}`)})
+	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusTooManyRequests, Err: errors.New("quota"), Body: []byte(`{"error":{"details":[{"violations":[{"quotaMetric":"generativelanguage.googleapis.com/generate_content_free_tier_requests","quotaId":"GenerateRequestsPerDayPerProjectPerModel-FreeTier","quotaValue":"20"}]}]}}`)})
 
 	got := u.snapshot([]string{"gemini/a"}, routes)[0]
 	if got.Requests != 2 || got.Successes != 1 || got.Failures != 1 || got.Available {

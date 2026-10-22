@@ -219,8 +219,9 @@ func parseQuotaError(body []byte) quotaError {
 			Details []struct {
 				Type       string `json:"@type"`
 				Violations []struct {
-					QuotaID    string `json:"quotaId"`
-					QuotaValue string `json:"quotaValue"`
+					QuotaMetric string `json:"quotaMetric"`
+					QuotaID     string `json:"quotaId"`
+					QuotaValue  string `json:"quotaValue"`
 				} `json:"violations"`
 				RetryDelay string `json:"retryDelay"`
 			} `json:"details"`
@@ -243,11 +244,16 @@ func parseQuotaError(body []byte) quotaError {
 					q.retryDelay = max(q.retryDelay, delay)
 				}
 			}
+			// Any daily quota (requests or tokens) exhausts the model for the day, but only the daily request
+			// quota (quotaMetric ..._requests) is a request count to learn as the daily limit.
 			for _, v := range d.Violations {
 				if !strings.Contains(v.QuotaID, "PerDay") {
 					continue
 				}
 				q.daily = true
+				if !strings.HasSuffix(v.QuotaMetric, "_requests") {
+					continue
+				}
 				if n, err := strconv.Atoi(v.QuotaValue); err == nil {
 					q.limit = n
 				}
