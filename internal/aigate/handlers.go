@@ -256,7 +256,7 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 	var cooling *allCoolingDownError
 	if errors.As(err, &cooling) {
 		g.log.Error("chat completion skipped: all models cooling down", "model", req.Model, "until", cooling.until)
-		w.Header().Set("Retry-After", strconv.Itoa(max(int(math.Ceil(time.Until(cooling.until).Seconds())), 1)))
+		w.Header().Set("Retry-After", strconv.Itoa(max(int(math.Ceil(cooling.until.Sub(g.usage.now()).Seconds())), 1)))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": err.Error(), "retry_after": cooling.until})
 		return
 	}
@@ -339,8 +339,8 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 		localReq := req
 		localReq.Model = modelID
 
-		body, err := g.callProvider(route, localReq)
-		g.usage.record(modelID, err)
+		body, header, err := g.callProvider(route, localReq)
+		g.usage.record(modelID, header, err)
 		if err == nil {
 			normalizedBody, normalizeErr := normalizeProviderResponse(route.Provider, modelID, body)
 			if normalizeErr != nil {

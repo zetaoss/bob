@@ -28,14 +28,14 @@ See [`config.example.yaml`](config.example.yaml).
 - `server.port` defaults to `8080`. `server.logLevel` is `debug`, `info` (default) or `error`; `debug` prints upstream provider requests and responses.
 - `aigate` is enabled when `aigate.models` is non-empty.
   - `models` use `{provider}/{model}` and split on the first `/`. Their order is the fallback priority.
-  - Providers: `gemini`, `ollama` (endpoints are fixed in code).
+  - Providers: `gemini`, `groq`, `ollama` (endpoints are fixed in code). Groq model IDs keep their own `/`, as in `groq/openai/gpt-oss-120b`.
   - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
   - `fallback.rounds` (default `2`) is how many passes over the model chain are tried; `fallback.perAttemptTimeout` (default `30s`) is the per-attempt HTTP timeout.
   - `model` may be omitted (every configured model in order), a provider name (that provider's models in order), or a configured model
     (only that model). Add `"fallback": true` to let a configured model fall back to the rest in configured order; the response's `model`
     and `provider_meta.attempted_models` show which model answered.
   - Calls are counted per model for the current quota day (Gemini daily quotas reset at midnight Pacific time). A `429` from a provider
-    puts the model in a cooldown taken from the error's `retryDelay`, or until the next reset for a daily quota; models in a cooldown are
+    puts the model in a cooldown taken from the error's `retryDelay` (Gemini) or the `Retry-After` header (Groq), or until the next reset for a daily quota; models in a cooldown are
     skipped, and if every model in the chain is, the request returns `429` with a `Retry-After` header (seconds) and `retry_after` (time). A daily quota error's `quotaValue` is
     remembered as the model's daily limit. Gemini has no API for remaining quota, so this is bob's own count, kept in memory and reset
     on restart.
@@ -68,7 +68,7 @@ method, path, status and duration. API keys and runbox certificates are printed 
 | `GET` | `/aigate/v1/models?all` | models available from providers, with `enabled` |
 | `GET` | `/aigate/v1/models/{provider}` | enabled models of one provider (`?all` as above) |
 | `POST` | `/aigate/v1/chat/completions` | OpenAI-style chat completion; the response adds `provider_meta` (`requested_model`, `attempted_models`) |
-| `GET` | `/aigate/v1/usage` | per model for the current quota day: `requests`, `successes`, `failures`, `daily_limit` and `remaining` (once learned from a `429`; every call except a `429` rejection counts against it), `available`, `cooldown_until`, `last_error`; plus `quota_day` and `next_reset` |
+| `GET` | `/aigate/v1/usage` | per model for the current quota day: `requests`, `successes`, `failures`, `daily_limit`, `remaining` and `quota_reset` with `quota_source` (`provider`: reported in Groq's `x-ratelimit-*-requests` headers on every response; `estimate`: learned from a Gemini `429` and counted by bob, where every call except a `429` rejection counts), `available`, `cooldown_until`, `last_error`; plus `quota_day` and `next_reset` |
 
 ```sh
 curl -X POST http://localhost:8080/aigate/v1/chat/completions \

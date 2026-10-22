@@ -14,8 +14,9 @@ import (
 // Gemini daily quotas reset at midnight Pacific time.
 var quotaLoc, _ = time.LoadLocation("America/Los_Angeles")
 
-// usageTracker counts provider calls per model for the current quota day and remembers
-// quota limits and cooldowns learned from 429 responses. State is in memory only.
+// usageTracker counts provider calls per model for the current quota day and remembers quota
+// limits and cooldowns learned from 429 responses or reported in response headers (Groq).
+// State is in memory only.
 type usageTracker struct {
 	mu     sync.Mutex
 	now    func() time.Time
@@ -31,6 +32,10 @@ type modelUsage struct {
 	dailyLimit    int
 	cooldownUntil time.Time
 	lastError     string
+	// Set when the provider reports its request quota in response headers.
+	reportedRemaining int
+	reportedReset     time.Time
+	reported          bool
 }
 
 type ModelUsage struct {
@@ -43,7 +48,11 @@ type ModelUsage struct {
 	Remaining     *int       `json:"remaining"`
 	Available     bool       `json:"available"`
 	CooldownUntil *time.Time `json:"cooldown_until,omitempty"`
-	LastError     string     `json:"last_error,omitempty"`
+	// QuotaSource is "provider" when daily_limit and remaining come from provider headers,
+	// "estimate" when learned from a 429 and counted by bob.
+	QuotaSource string     `json:"quota_source,omitempty"`
+	QuotaReset  *time.Time `json:"quota_reset,omitempty"`
+	LastError   string     `json:"last_error,omitempty"`
 }
 
 func newUsageTracker(now func() time.Time) *usageTracker {
@@ -86,11 +95,19 @@ func (u *usageTracker) coolingDown(model string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func (u *usageTracker) record(model string, err error) {
+func (u *usageTracker) record(model string, header http.Header, err error) {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	m := u.entry(model)
 	m.requests++
+	var callErr *providerCallError
+	if header == nil && errors.As(err, &callErr) {
+		header = callErr.Header
+	}
+	if limit, remaining, reset, ok := parseRateLimitHeaders(header); ok {
+		m.dailyLimit, m.reportedRemaining, m.reported = limit, remaining, true
+		m.reportedReset = u.now().Add(reset)
+	}
 	if err == nil {
 		m.successes++
 		return
@@ -98,21 +115,39 @@ func (u *usageTracker) record(model string, err error) {
 	m.failures++
 	m.lastError = truncate(err.Error(), 300)
 
-	var callErr *providerCallError
 	if !errors.As(err, &callErr) || callErr.StatusCode != http.StatusTooManyRequests {
 		return
 	}
 	m.rejected++
 	q := parseQuotaError(callErr.Body)
-	if q.daily && q.limit > 0 {
+	if q.daily && q.limit > 0 && !m.reported {
 		m.dailyLimit = q.limit
 	}
+	retryAfter, _ := strconv.Atoi(callErr.Header.Get("Retry-After"))
 	switch {
 	case q.retryDelay > 0:
 		m.cooldownUntil = u.now().Add(q.retryDelay)
+	case retryAfter > 0:
+		m.cooldownUntil = u.now().Add(time.Duration(retryAfter) * time.Second)
 	case q.daily:
 		m.cooldownUntil = nextQuotaReset(u.now())
 	}
+}
+
+// parseRateLimitHeaders reads the request quota Groq reports on every response:
+// x-ratelimit-limit-requests and x-ratelimit-remaining-requests (per day), and
+// x-ratelimit-reset-requests (a duration such as "2m59.56s").
+func parseRateLimitHeaders(h http.Header) (limit, remaining int, reset time.Duration, ok bool) {
+	if h == nil {
+		return 0, 0, 0, false
+	}
+	limit, err1 := strconv.Atoi(h.Get("X-Ratelimit-Limit-Requests"))
+	remaining, err2 := strconv.Atoi(h.Get("X-Ratelimit-Remaining-Requests"))
+	if err1 != nil || err2 != nil || limit <= 0 {
+		return 0, 0, 0, false
+	}
+	reset, _ = time.ParseDuration(h.Get("X-Ratelimit-Reset-Requests"))
+	return limit, remaining, reset, true
 }
 
 func (u *usageTracker) snapshot(models []string, routes map[string]ModelRoute) []ModelUsage {
@@ -131,14 +166,23 @@ func (u *usageTracker) snapshot(models []string, routes map[string]ModelRoute) [
 			Available: !now.Before(m.cooldownUntil),
 			LastError: m.lastError,
 		}
-		if m.dailyLimit > 0 {
+		switch {
+		case m.reported:
+			limit, remaining := m.dailyLimit, m.reportedRemaining
+			if !now.Before(m.reportedReset) {
+				remaining = limit
+			}
+			reset := m.reportedReset
+			item.DailyLimit, item.Remaining, item.QuotaSource, item.QuotaReset = &limit, &remaining, "provider", &reset
+		case m.dailyLimit > 0:
 			limit := m.dailyLimit
 			// Every call except a 429 rejection may count against the quota, including other errors and timeouts.
 			remaining := max(limit-(m.requests-m.rejected), 0)
 			if !item.Available {
 				remaining = 0
 			}
-			item.DailyLimit, item.Remaining = &limit, &remaining
+			reset := nextQuotaReset(now)
+			item.DailyLimit, item.Remaining, item.QuotaSource, item.QuotaReset = &limit, &remaining, "estimate", &reset
 		}
 		if !item.Available {
 			until := m.cooldownUntil

@@ -15,10 +15,13 @@ aigate:
     # fallback priority: first model is tried first
     # format: {provider}/{model}
     - gemini/gemini-2.5-flash
+    - groq/openai/gpt-oss-120b
     - ollama/gemma4:31b
   providers:
     gemini:
       apiKey: ${GEMINI_API_KEY}
+    groq:
+      apiKey: ${GROQ_API_KEY}
     ollama:
       apiKey: ${OLLAMA_API_KEY}
 

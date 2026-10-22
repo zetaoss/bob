@@ -1,6 +1,7 @@
 package aigate
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -52,8 +53,8 @@ func TestUsageTrackerQuotaDay(t *testing.T) {
 	u := newUsageTracker(func() time.Time { return now })
 	routes := map[string]ModelRoute{"gemini/a": {Provider: "gemini"}}
 
-	u.record("gemini/a", nil)
-	u.record("gemini/a", &providerCallError{StatusCode: http.StatusTooManyRequests, Err: errors.New("quota"), Body: []byte(`{"error":{"details":[{"violations":[{"quotaId":"PerDay","quotaValue":"20"}]}]}}`)})
+	u.record("gemini/a", nil, nil)
+	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusTooManyRequests, Err: errors.New("quota"), Body: []byte(`{"error":{"details":[{"violations":[{"quotaId":"PerDay","quotaValue":"20"}]}]}}`)})
 
 	got := u.snapshot([]string{"gemini/a"}, routes)[0]
 	if got.Requests != 2 || got.Successes != 1 || got.Failures != 1 || got.Available {
@@ -70,8 +71,8 @@ func TestUsageTrackerQuotaDay(t *testing.T) {
 	}
 
 	// Every call except a 429 rejection counts against the learned limit, including other errors.
-	u.record("gemini/a", &providerCallError{StatusCode: http.StatusInternalServerError, Err: errors.New("boom")})
-	u.record("gemini/a", nil)
+	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusInternalServerError, Err: errors.New("boom")})
+	u.record("gemini/a", nil, nil)
 	got = u.snapshot([]string{"gemini/a"}, routes)[0]
 	if got.Requests != 2 || *got.Remaining != 18 {
 		t.Fatalf("expected the 500 and the success counted, got %+v remaining=%d", got, *got.Remaining)
@@ -189,5 +190,88 @@ func TestChatConfiguredModelDoesNotFallBack(t *testing.T) {
 	code, payload = chat(t, g, `{"messages":[{"role":"user","content":"x"}]}`)
 	if code != http.StatusOK || payload["model"] != "gemini/b" {
 		t.Fatalf("expected an omitted model to use every model in order, got %d %v", code, payload)
+	}
+}
+
+func TestGroqReportedQuota(t *testing.T) {
+	var mu sync.Mutex
+	remaining := 3
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer groq-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		w.Header().Set("X-Ratelimit-Limit-Requests", "1000")
+		w.Header().Set("X-Ratelimit-Reset-Requests", "1m26.4s")
+		if remaining == 0 {
+			w.Header().Set("X-Ratelimit-Remaining-Requests", "0")
+			w.Header().Set("Retry-After", "86")
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"rate limit","type":"requests"}}`)
+			return
+		}
+		remaining--
+		w.Header().Set("X-Ratelimit-Remaining-Requests", strconv.Itoa(remaining))
+		_, _ = io.WriteString(w, `{"model":"openai/gpt-oss-20b","choices":[{"message":{"role":"assistant","content":"hi"}}]}`)
+	}))
+	t.Cleanup(ts.Close)
+	old := groqDefaultEndpoint
+	groqDefaultEndpoint = ts.URL
+	t.Cleanup(func() { groqDefaultEndpoint = old })
+
+	cfg := &config.AIGateConfig{
+		Models:    []string{"groq/openai/gpt-oss-20b"},
+		Providers: map[string]config.ProviderConfig{"groq": {APIKey: "groq-key"}},
+		Fallback:  config.FallbackConfig{Rounds: 2, PerAttemptTimeout: 5 * time.Second},
+	}
+	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g.usage.now = func() time.Time { return time.Date(2026, 10, 22, 12, 0, 0, 0, quotaLoc) }
+
+	code, payload := chat(t, g, `{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}]}`)
+	if code != http.StatusOK || payload["model"] != "groq/openai/gpt-oss-20b" {
+		t.Fatalf("unexpected groq response: %d %v", code, payload)
+	}
+	got := g.usage.snapshot([]string{"groq/openai/gpt-oss-20b"}, g.modelRoutes)[0]
+	if got.QuotaSource != "provider" || *got.DailyLimit != 1000 || *got.Remaining != 2 || !got.QuotaReset.Equal(g.usage.now().Add(86400*time.Millisecond)) {
+		t.Fatalf("unexpected reported quota: %+v remaining=%d", got, *got.Remaining)
+	}
+
+	remaining = 0
+	code, _, header := chatWithHeader(t, g, `{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}]}`)
+	if code != http.StatusBadGateway {
+		t.Fatalf("expected the 429 to fail the request, got %d", code)
+	}
+	code, _, header = chatWithHeader(t, g, `{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}]}`)
+	if code != http.StatusTooManyRequests || header.Get("Retry-After") != "86" {
+		t.Fatalf("expected a cooldown from Retry-After, got %d %q", code, header.Get("Retry-After"))
+	}
+	got = g.usage.snapshot([]string{"groq/openai/gpt-oss-20b"}, g.modelRoutes)[0]
+	if got.Available || *got.Remaining != 0 || got.Requests != 2 {
+		t.Fatalf("unexpected usage after 429: %+v remaining=%d", got, *got.Remaining)
+	}
+}
+
+func TestFetchGroqModels(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer groq-key" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		_, _ = io.WriteString(w, `{"object":"list","data":[{"id":"qwen/qwen3.8-27b"},{"id":"openai/gpt-oss-20b"}]}`)
+	}))
+	t.Cleanup(ts.Close)
+	old := groqModelsEndpoint
+	groqModelsEndpoint = ts.URL
+	t.Cleanup(func() { groqModelsEndpoint = old })
+
+	g := &Gateway{providerMap: map[string]config.ProviderConfig{"groq": {APIKey: "groq-key"}}}
+	models, err := g.fetchGroqModels(context.Background())
+	if err != nil || strings.Join(models, ",") != "openai/gpt-oss-20b,qwen/qwen3.8-27b" {
+		t.Fatalf("unexpected groq models: %v %v", models, err)
 	}
 }
