@@ -32,6 +32,12 @@ See [`config.example.yaml`](config.example.yaml).
   - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
   - `fallback.rounds` (default `2`) is how many passes over the model chain are tried; `fallback.perAttemptTimeout` (default `30s`) is the per-attempt HTTP timeout.
   - `model` may be omitted (configured order), a provider name (that provider's models), or a configured model (tried first, then the rest).
+    `"fallback": false` with a configured model tries only that model (for callers whose results must not come from another model).
+  - Calls are counted per model for the current quota day (Gemini daily quotas reset at midnight Pacific time). A `429` from a provider
+    puts the model in a cooldown taken from the error's `retryDelay`, or until the next reset for a daily quota; models in a cooldown are
+    skipped, and if every model in the chain is, the request returns `429` with `retry_after`. A daily quota error's `quotaValue` is
+    remembered as the model's daily limit. Gemini has no API for remaining quota, so this is bob's own count, kept in memory and reset
+    on restart.
 - `search` holds search API credentials. Each engine is used only when its credentials are set
   (`daum_blog`: Kakao key; `naver_blog`, `naver_news`: Naver client ID and secret; `google_search`: Google API key and CX).
   The route is enabled when at least one engine is.
@@ -61,6 +67,7 @@ method, path, status and duration. API keys and runbox certificates are printed 
 | `GET` | `/aigate/v1/models?all` | models available from providers, with `enabled` |
 | `GET` | `/aigate/v1/models/{provider}` | enabled models of one provider (`?all` as above) |
 | `POST` | `/aigate/v1/chat/completions` | OpenAI-style chat completion; the response adds `provider_meta` (`requested_model`, `attempted_models`) |
+| `GET` | `/aigate/v1/usage` | per model for the current quota day: `requests`, `successes`, `failures`, `daily_limit` and `remaining` (once learned from a `429`), `available`, `cooldown_until`, `last_error`; plus `quota_day` and `next_reset` |
 
 ```sh
 curl -X POST http://localhost:8080/aigate/v1/chat/completions \

@@ -2,11 +2,13 @@ package aigate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"bob/internal/config"
 )
@@ -21,6 +23,7 @@ type Gateway struct {
 	modelOrder           []string
 	availableModels      map[string][]string
 	availableModelErrors map[string]error
+	usage                *usageTracker
 }
 
 type ModelRoute struct {
@@ -38,6 +41,8 @@ type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
+	// Fallback false limits the chain to the requested model. It is not sent to providers.
+	Fallback *bool `json:"fallback,omitempty"`
 }
 
 type Message struct {
@@ -88,6 +93,7 @@ func NewGateway(cfg *config.AIGateConfig, log *slog.Logger) (*Gateway, error) {
 		modelOrder:           modelOrder,
 		availableModels:      make(map[string][]string, len(providerMap)),
 		availableModelErrors: make(map[string]error),
+		usage:                newUsageTracker(time.Now),
 	}, nil
 }
 
@@ -243,8 +249,21 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "no models configured"})
 		return
 	}
+	if req.Fallback != nil && !*req.Fallback {
+		if _, isModel := g.modelRoutes[req.Model]; !isModel {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fallback false requires a configured model", "model": req.Model})
+			return
+		}
+		modelChain = modelChain[:1]
+	}
 
 	responseBody, resolvedModel, attemptedModels, err := g.callWithFallback(req, modelChain)
+	var cooling *allCoolingDownError
+	if errors.As(err, &cooling) {
+		g.log.Error("chat completion skipped: all models cooling down", "model", req.Model, "until", cooling.until)
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": err.Error(), "retry_after": cooling.until})
+		return
+	}
 	if err != nil {
 		g.log.Error("chat completion failed", "model", req.Model, "err", err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -304,15 +323,23 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 	attemptLimit := len(modelChain) * fallbackRounds
 	attempted := make([]string, 0, attemptLimit)
 	var lastErr error
+	var earliestRetry time.Time
 
 	for i := 0; i < attemptLimit; i++ {
 		modelID := modelChain[i%len(modelChain)]
+		if until, cooling := g.usage.coolingDown(modelID); cooling {
+			if earliestRetry.IsZero() || until.Before(earliestRetry) {
+				earliestRetry = until
+			}
+			continue
+		}
 		attempted = append(attempted, modelID)
 		route := g.modelRoutes[modelID]
 		localReq := req
 		localReq.Model = modelID
 
 		body, err := g.callProvider(route, localReq)
+		g.usage.record(modelID, err)
 		if err == nil {
 			normalizedBody, normalizeErr := normalizeProviderResponse(route.Provider, modelID, body)
 			if normalizeErr != nil {
@@ -321,16 +348,24 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 			return normalizedBody, modelID, append([]string(nil), attempted...), nil
 		}
 		lastErr = err
-		if i == attemptLimit-1 {
-			return nil, "", append([]string(nil), attempted...), fmt.Errorf("attempted models=%s: %w", strings.Join(attempted, ","), err)
-		}
-		g.log.Error("fallback to next model after failure", "model", modelID, "err", err)
+		g.log.Error("model attempt failed", "model", modelID, "err", err)
 	}
 
+	if len(attempted) == 0 {
+		return nil, "", nil, &allCoolingDownError{until: earliestRetry}
+	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("request failed without provider error")
 	}
 	return nil, "", append([]string(nil), attempted...), fmt.Errorf("attempted models=%s: %w", strings.Join(attempted, ","), lastErr)
+}
+
+type allCoolingDownError struct {
+	until time.Time
+}
+
+func (e *allCoolingDownError) Error() string {
+	return fmt.Sprintf("all models are cooling down after quota errors until %s", e.until.Format(time.RFC3339))
 }
 
 func addProviderMeta(responseBody []byte, requestedModel string, attemptedModels []string) ([]byte, error) {
@@ -366,5 +401,6 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("/v1/models", g.ModelsHandler)
 	mux.HandleFunc("/v1/models/", g.ModelsByProviderHandler)
 	mux.HandleFunc("/v1/chat/completions", g.ChatCompletionsHandler)
+	mux.HandleFunc("/v1/usage", g.UsageHandler)
 	return mux
 }

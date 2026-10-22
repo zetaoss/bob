@@ -56,7 +56,8 @@ type ollamaChatResponse struct {
 	EvalCount  int    `json:"eval_count"`
 }
 
-const (
+// Variables so tests can point them at a local server.
+var (
 	geminiDefaultEndpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 	ollamaDefaultEndpoint = "https://ollama.com/api/chat"
 )
@@ -75,6 +76,7 @@ func defaultProviderEndpoint(provider string) string {
 type providerCallError struct {
 	StatusCode int
 	Timeout    bool
+	Body       []byte
 	Err        error
 }
 
@@ -147,6 +149,7 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 		g.log.Error("provider error", "provider", route.Provider, "status", resp.StatusCode)
 		return nil, &providerCallError{
 			StatusCode: resp.StatusCode,
+			Body:       respBytes,
 			Err:        fmt.Errorf("provider %s returned status %d: %s", route.Provider, resp.StatusCode, strings.TrimSpace(string(respBytes))),
 		}
 	}
