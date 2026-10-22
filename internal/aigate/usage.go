@@ -136,7 +136,8 @@ func (u *usageTracker) record(model string, header http.Header, err error) {
 
 // parseRateLimitHeaders reads the request quota Groq reports on every response:
 // x-ratelimit-limit-requests and x-ratelimit-remaining-requests (per day), and
-// x-ratelimit-reset-requests (a duration such as "2m59.56s").
+// x-ratelimit-reset-requests (a duration such as "1m26.4s" until the next request is restored;
+// the quota refills gradually, limit requests per day, rather than all at once).
 func parseRateLimitHeaders(h http.Header) (limit, remaining int, reset time.Duration, ok bool) {
 	if h == nil {
 		return 0, 0, 0, false
@@ -169,10 +170,15 @@ func (u *usageTracker) snapshot(models []string, routes map[string]ModelRoute) [
 		switch {
 		case m.reported:
 			limit, remaining := m.dailyLimit, m.reportedRemaining
-			if !now.Before(m.reportedReset) {
-				remaining = limit
+			// Add the requests refilled since the report: the first at reportedReset, then one per day/limit.
+			if remaining < limit && !now.Before(m.reportedReset) {
+				interval := 24 * time.Hour / time.Duration(limit)
+				remaining = min(limit, remaining+1+int(now.Sub(m.reportedReset)/interval))
 			}
 			reset := m.reportedReset
+			if now.After(reset) {
+				reset = now
+			}
 			item.DailyLimit, item.Remaining, item.QuotaSource, item.QuotaReset = &limit, &remaining, "provider", &reset
 		case m.dailyLimit > 0:
 			limit := m.dailyLimit

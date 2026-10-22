@@ -68,7 +68,7 @@ method, path, status and duration. API keys and runbox certificates are printed 
 | `GET` | `/aigate/v1/models?all` | models available from providers, with `enabled` |
 | `GET` | `/aigate/v1/models/{provider}` | enabled models of one provider (`?all` as above) |
 | `POST` | `/aigate/v1/chat/completions` | OpenAI-style chat completion; the response adds `provider_meta` (`requested_model`, `attempted_models`) |
-| `GET` | `/aigate/v1/usage` | per model for the current quota day: `requests`, `successes`, `failures`, `daily_limit`, `remaining` and `quota_reset` with `quota_source` (`provider`: reported in Groq's `x-ratelimit-*-requests` headers on every response; `estimate`: learned from a Gemini `429` and counted by bob, where every call except a `429` rejection counts), `available`, `cooldown_until`, `last_error`; plus `quota_day` and `next_reset` |
+| `GET` | `/aigate/v1/usage` | per model for the current quota day: `requests`, `successes`, `failures`, `daily_limit`, `remaining` and `quota_reset` with `quota_source` (`provider`: reported in Groq's `x-ratelimit-*-requests` headers on every response, where the quota refills one request per day/limit and `quota_reset` is when the next one returns; `estimate`: learned from a Gemini `429` and counted by bob, where every call except a `429` rejection counts), `available`, `cooldown_until`, `last_error`; plus `quota_day` and `next_reset` |
 
 ```sh
 curl -X POST http://localhost:8080/aigate/v1/chat/completions \

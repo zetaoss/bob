@@ -254,6 +254,14 @@ func TestGroqReportedQuota(t *testing.T) {
 	if got.Available || *got.Remaining != 0 || got.Requests != 2 {
 		t.Fatalf("unexpected usage after 429: %+v remaining=%d", got, *got.Remaining)
 	}
+
+	// The quota refills one request per 86.4s (1000 a day), the first at the reported reset.
+	start := g.usage.now()
+	g.usage.now = func() time.Time { return start.Add(86400*time.Millisecond + 3*86400*time.Millisecond) }
+	got = g.usage.snapshot([]string{"groq/openai/gpt-oss-20b"}, g.modelRoutes)[0]
+	if *got.Remaining != 4 {
+		t.Fatalf("expected 4 requests refilled, got %d", *got.Remaining)
+	}
 }
 
 func TestFetchGroqModels(t *testing.T) {
