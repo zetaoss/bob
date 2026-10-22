@@ -36,6 +36,7 @@ type modelUsage struct {
 	lastError      string
 	// Set when the provider reports its request quota in response headers.
 	reportedRemaining int
+	reportedAt        time.Time
 	reportedReset     time.Time
 	reported          bool
 }
@@ -108,7 +109,7 @@ func (u *usageTracker) record(model string, header http.Header, err error) {
 	}
 	if limit, remaining, reset, ok := parseRateLimitHeaders(header); ok {
 		m.dailyLimit, m.reportedRemaining, m.reported = limit, remaining, true
-		m.reportedReset = u.now().Add(reset)
+		m.reportedAt, m.reportedReset = u.now(), u.now().Add(reset)
 	}
 	if err == nil {
 		m.successes++
@@ -139,8 +140,8 @@ func (u *usageTracker) record(model string, header http.Header, err error) {
 
 // parseRateLimitHeaders reads the request quota Groq reports on every response:
 // x-ratelimit-limit-requests and x-ratelimit-remaining-requests (per day), and
-// x-ratelimit-reset-requests (a duration such as "1m26.4s" until the next request is restored;
-// the quota refills gradually, limit requests per day, rather than all at once).
+// x-ratelimit-reset-requests (a duration such as "2m59.56s" until the request bucket is full again;
+// it refills gradually, one request per day/limit, so 30 used of 14,400 a day is full in 180s).
 func parseRateLimitHeaders(h http.Header) (limit, remaining int, reset time.Duration, ok bool) {
 	if h == nil {
 		return 0, 0, 0, false
@@ -173,10 +174,12 @@ func (u *usageTracker) snapshot(models []string, routes map[string]ModelRoute) [
 		switch {
 		case m.reported:
 			limit, remaining := m.dailyLimit, m.reportedRemaining
-			// Add the requests refilled since the report: the first at reportedReset, then one per day/limit.
-			if remaining < limit && !now.Before(m.reportedReset) {
+			// Add the requests refilled since the report, one per day/limit; the bucket is full at reportedReset.
+			if !now.Before(m.reportedReset) {
+				remaining = limit
+			} else if remaining < limit {
 				interval := 24 * time.Hour / time.Duration(limit)
-				remaining = min(limit, remaining+1+int(now.Sub(m.reportedReset)/interval))
+				remaining = min(limit, remaining+int(now.Sub(m.reportedAt)/interval))
 			}
 			reset := m.reportedReset
 			if now.After(reset) {

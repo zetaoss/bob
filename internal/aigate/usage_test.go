@@ -202,8 +202,10 @@ func TestChatConfiguredModelDoesNotFallBack(t *testing.T) {
 }
 
 func TestGroqReportedQuota(t *testing.T) {
+	const limit = 1000 // a day, so one request returns every 86.4s
+	slot := 86400 * time.Millisecond
 	var mu sync.Mutex
-	remaining := 3
+	remaining := 10
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer groq-key" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -211,17 +213,19 @@ func TestGroqReportedQuota(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
-		w.Header().Set("X-Ratelimit-Limit-Requests", "1000")
-		w.Header().Set("X-Ratelimit-Reset-Requests", "1m26.4s")
+		if remaining > 0 {
+			remaining--
+		}
+		// Groq reports the time until the bucket is full again: one slot per used request.
+		w.Header().Set("X-Ratelimit-Limit-Requests", strconv.Itoa(limit))
+		w.Header().Set("X-Ratelimit-Remaining-Requests", strconv.Itoa(remaining))
+		w.Header().Set("X-Ratelimit-Reset-Requests", (time.Duration(limit-remaining) * slot).String())
 		if remaining == 0 {
-			w.Header().Set("X-Ratelimit-Remaining-Requests", "0")
 			w.Header().Set("Retry-After", "86")
 			w.WriteHeader(http.StatusTooManyRequests)
 			_, _ = io.WriteString(w, `{"error":{"message":"rate limit","type":"requests"}}`)
 			return
 		}
-		remaining--
-		w.Header().Set("X-Ratelimit-Remaining-Requests", strconv.Itoa(remaining))
 		_, _ = io.WriteString(w, `{"model":"openai/gpt-oss-20b","choices":[{"message":{"role":"assistant","content":"hi"}}]}`)
 	}))
 	t.Cleanup(ts.Close)
@@ -238,37 +242,40 @@ func TestGroqReportedQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	g.usage.now = func() time.Time { return time.Date(2026, 10, 22, 12, 0, 0, 0, quotaLoc) }
+	start := time.Date(2026, 10, 22, 12, 0, 0, 0, quotaLoc)
+	g.usage.now = func() time.Time { return start }
+	snapshot := func() ModelUsage { return g.usage.snapshot([]string{"groq/openai/gpt-oss-20b"}, g.modelRoutes)[0] }
+	body := `{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}]}`
 
-	code, payload := chat(t, g, `{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}]}`)
-	if code != http.StatusOK || payload["model"] != "groq/openai/gpt-oss-20b" {
+	if code, payload := chat(t, g, body); code != http.StatusOK || payload["model"] != "groq/openai/gpt-oss-20b" {
 		t.Fatalf("unexpected groq response: %d %v", code, payload)
 	}
-	got := g.usage.snapshot([]string{"groq/openai/gpt-oss-20b"}, g.modelRoutes)[0]
-	if got.QuotaSource != "provider" || *got.DailyLimit != 1000 || *got.Remaining != 2 || !got.QuotaReset.Equal(g.usage.now().Add(86400*time.Millisecond)) {
+	got := snapshot()
+	if got.QuotaSource != "provider" || *got.DailyLimit != limit || *got.Remaining != 9 || !got.QuotaReset.Equal(start.Add(991*slot)) {
 		t.Fatalf("unexpected reported quota: %+v remaining=%d", got, *got.Remaining)
 	}
 
+	mu.Lock()
 	remaining = 0
-	code, _, header := chatWithHeader(t, g, `{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}]}`)
-	if code != http.StatusBadGateway {
+	mu.Unlock()
+	if code, _ := chat(t, g, body); code != http.StatusBadGateway {
 		t.Fatalf("expected the 429 to fail the request, got %d", code)
 	}
-	code, _, header = chatWithHeader(t, g, `{"model":"groq/openai/gpt-oss-20b","messages":[{"role":"user","content":"x"}]}`)
-	if code != http.StatusTooManyRequests || header.Get("Retry-After") != "86" {
+	if code, _, header := chatWithHeader(t, g, body); code != http.StatusTooManyRequests || header.Get("Retry-After") != "86" {
 		t.Fatalf("expected a cooldown from Retry-After, got %d %q", code, header.Get("Retry-After"))
 	}
-	got = g.usage.snapshot([]string{"groq/openai/gpt-oss-20b"}, g.modelRoutes)[0]
-	if got.Available || *got.Remaining != 0 || got.Requests != 2 {
+	if got = snapshot(); got.Available || *got.Remaining != 0 || got.Requests != 2 {
 		t.Fatalf("unexpected usage after 429: %+v remaining=%d", got, *got.Remaining)
 	}
 
-	// The quota refills one request per 86.4s (1000 a day), the first at the reported reset.
-	start := g.usage.now()
-	g.usage.now = func() time.Time { return start.Add(86400*time.Millisecond + 3*86400*time.Millisecond) }
-	got = g.usage.snapshot([]string{"groq/openai/gpt-oss-20b"}, g.modelRoutes)[0]
-	if *got.Remaining != 4 {
+	// Refilling starts at the report, one request per slot, until the bucket is full at the reset.
+	g.usage.now = func() time.Time { return start.Add(4*slot + time.Second) }
+	if got = snapshot(); *got.Remaining != 4 {
 		t.Fatalf("expected 4 requests refilled, got %d", *got.Remaining)
+	}
+	g.usage.now = func() time.Time { return start.Add(limit * slot) }
+	if got = snapshot(); *got.Remaining != limit {
+		t.Fatalf("expected a full bucket at the reset, got %d", *got.Remaining)
 	}
 }
 
