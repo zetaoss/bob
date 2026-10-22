@@ -31,7 +31,9 @@ type modelUsage struct {
 	rejected      int
 	dailyLimit    int
 	cooldownUntil time.Time
-	lastError     string
+	// dailyExhausted is set when the cooldown comes from a daily quota, not a shorter limit.
+	dailyExhausted bool
+	lastError      string
 	// Set when the provider reports its request quota in response headers.
 	reportedRemaining int
 	reportedReset     time.Time
@@ -124,6 +126,7 @@ func (u *usageTracker) record(model string, header http.Header, err error) {
 		m.dailyLimit = q.limit
 	}
 	retryAfter, _ := strconv.Atoi(callErr.Header.Get("Retry-After"))
+	m.dailyExhausted = q.daily
 	switch {
 	case q.retryDelay > 0:
 		m.cooldownUntil = u.now().Add(q.retryDelay)
@@ -184,7 +187,8 @@ func (u *usageTracker) snapshot(models []string, routes map[string]ModelRoute) [
 			limit := m.dailyLimit
 			// Every call except a 429 rejection may count against the quota, including other errors and timeouts.
 			remaining := max(limit-(m.requests-m.rejected), 0)
-			if !item.Available {
+			// Only a daily-quota cooldown means nothing is left today; a per-minute one does not.
+			if !item.Available && m.dailyExhausted {
 				remaining = 0
 			}
 			reset := nextQuotaReset(now)

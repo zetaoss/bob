@@ -70,11 +70,19 @@ func TestUsageTrackerQuotaDay(t *testing.T) {
 		t.Fatalf("expected counters reset on a new quota day, got %+v", got)
 	}
 
+	// A per-minute 429 cools the model down without emptying the learned daily quota.
+	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusTooManyRequests, Err: errors.New("rpm"), Body: []byte(`{"error":{"details":[{"violations":[{"quotaId":"PerMinute","quotaValue":"10"}]},{"retryDelay":"30s"}]}}`)})
+	got = u.snapshot([]string{"gemini/a"}, routes)[0]
+	if got.Available || *got.Remaining != 20 {
+		t.Fatalf("expected a per-minute cooldown to keep remaining at 20, got %+v remaining=%d", got, *got.Remaining)
+	}
+	now = now.Add(time.Minute)
+
 	// Every call except a 429 rejection counts against the learned limit, including other errors.
 	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusInternalServerError, Err: errors.New("boom")})
 	u.record("gemini/a", nil, nil)
 	got = u.snapshot([]string{"gemini/a"}, routes)[0]
-	if got.Requests != 2 || *got.Remaining != 18 {
+	if got.Requests != 3 || *got.Remaining != 18 {
 		t.Fatalf("expected the 500 and the success counted, got %+v remaining=%d", got, *got.Remaining)
 	}
 }
