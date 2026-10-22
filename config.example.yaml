@@ -9,16 +9,22 @@ server:
 aigate:
   validateModelsOnStartup: true
   fallback:
-    rounds: 2
+    maxFallbacks: 2
     perAttemptTimeout: 30s
   models:
     # fallback priority: first model is tried first
     # format: {provider}/{model}
     - gemini/gemini-2.5-flash
+    - groq/openai/gpt-oss-120b
     - ollama/gemma4:31b
   providers:
     gemini:
       apiKey: ${GEMINI_API_KEY}
+    groq:
+      apiKey: ${GROQ_API_KEY}
+    cloudflare:   # Workers AI
+      apiKey: ${CF_AI_API_TOKEN}
+      accountId: ${CF_AI_ACCOUNT_ID}
     ollama:
       apiKey: ${OLLAMA_API_KEY}
 

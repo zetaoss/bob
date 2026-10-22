@@ -2,16 +2,20 @@ package aigate
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
+	"time"
 
 	"bob/internal/config"
 )
 
-// Gateway routes OpenAI-style chat completions to configured providers with fallback.
+// Gateway routes OpenAI-style chat completions to configured providers, with fallback across models on request.
 // Moved from github.com/zetaoss/aigate; bob serves it under /aigate.
 type Gateway struct {
 	cfg                  *config.AIGateConfig
@@ -21,6 +25,7 @@ type Gateway struct {
 	modelOrder           []string
 	availableModels      map[string][]string
 	availableModelErrors map[string]error
+	usage                *usageTracker
 }
 
 type ModelRoute struct {
@@ -38,6 +43,8 @@ type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
+	// Fallback true lets a request for a configured model fall back to the other models. It is not sent to providers.
+	Fallback bool `json:"fallback,omitempty"`
 }
 
 type Message struct {
@@ -88,6 +95,7 @@ func NewGateway(cfg *config.AIGateConfig, log *slog.Logger) (*Gateway, error) {
 		modelOrder:           modelOrder,
 		availableModels:      make(map[string][]string, len(providerMap)),
 		availableModelErrors: make(map[string]error),
+		usage:                newUsageTracker(time.Now),
 	}, nil
 }
 
@@ -234,7 +242,7 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	modelChain, badModel := g.resolveModelChain(req.Model)
+	modelChain, badModel := g.resolveModelChain(req.Model, req.Fallback)
 	if badModel {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "model not configured", "model": req.Model})
 		return
@@ -245,6 +253,13 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	responseBody, resolvedModel, attemptedModels, err := g.callWithFallback(req, modelChain)
+	var cooling *allCoolingDownError
+	if errors.As(err, &cooling) {
+		g.log.Error("chat completion skipped: all models cooling down", "model", req.Model, "until", cooling.until)
+		w.Header().Set("Retry-After", strconv.Itoa(max(int(math.Ceil(cooling.until.Sub(g.usage.now()).Seconds())), 1)))
+		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": err.Error(), "retry_after": cooling.until})
+		return
+	}
 	if err != nil {
 		g.log.Error("chat completion failed", "model", req.Model, "err", err)
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
@@ -263,7 +278,9 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 	_, _ = w.Write(responseBody)
 }
 
-func (g *Gateway) resolveModelChain(requestedModel string) ([]string, bool) {
+// resolveModelChain returns the models to try: every configured model when none is requested, a provider's
+// models for a provider name, and for a configured model that model alone, or followed by the rest with fallback.
+func (g *Gateway) resolveModelChain(requestedModel string, fallback bool) ([]string, bool) {
 	if requestedModel == "" {
 		return append([]string(nil), g.modelOrder...), false
 	}
@@ -284,6 +301,9 @@ func (g *Gateway) resolveModelChain(requestedModel string) ([]string, bool) {
 		return nil, true
 	}
 	chain := []string{requestedModel}
+	if !fallback {
+		return chain, false
+	}
 	for _, model := range g.modelOrder {
 		if model == requestedModel {
 			continue
@@ -297,22 +317,32 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 	if len(modelChain) == 0 {
 		return nil, "", nil, fmt.Errorf("no models configured")
 	}
-	fallbackRounds := g.cfg.Fallback.Rounds
-	if fallbackRounds < 1 {
-		fallbackRounds = 2
+	// One pass over the chain, calling at most the first available model and MaxFallbacks more.
+	maxCalls := 1
+	if g.cfg.Fallback.MaxFallbacks != nil {
+		maxCalls += *g.cfg.Fallback.MaxFallbacks
 	}
-	attemptLimit := len(modelChain) * fallbackRounds
-	attempted := make([]string, 0, attemptLimit)
+	attempted := make([]string, 0, maxCalls)
 	var lastErr error
+	var earliestRetry time.Time
 
-	for i := 0; i < attemptLimit; i++ {
-		modelID := modelChain[i%len(modelChain)]
+	for _, modelID := range modelChain {
+		if len(attempted) >= maxCalls {
+			break
+		}
+		if until, cooling := g.usage.coolingDown(modelID); cooling {
+			if earliestRetry.IsZero() || until.Before(earliestRetry) {
+				earliestRetry = until
+			}
+			continue
+		}
 		attempted = append(attempted, modelID)
 		route := g.modelRoutes[modelID]
 		localReq := req
 		localReq.Model = modelID
 
-		body, err := g.callProvider(route, localReq)
+		body, header, err := g.callProvider(route, localReq)
+		g.usage.record(modelID, header, err)
 		if err == nil {
 			normalizedBody, normalizeErr := normalizeProviderResponse(route.Provider, modelID, body)
 			if normalizeErr != nil {
@@ -321,16 +351,24 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 			return normalizedBody, modelID, append([]string(nil), attempted...), nil
 		}
 		lastErr = err
-		if i == attemptLimit-1 {
-			return nil, "", append([]string(nil), attempted...), fmt.Errorf("attempted models=%s: %w", strings.Join(attempted, ","), err)
-		}
-		g.log.Error("fallback to next model after failure", "model", modelID, "err", err)
+		g.log.Error("model attempt failed", "model", modelID, "err", err)
 	}
 
+	if len(attempted) == 0 {
+		return nil, "", nil, &allCoolingDownError{until: earliestRetry}
+	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("request failed without provider error")
 	}
 	return nil, "", append([]string(nil), attempted...), fmt.Errorf("attempted models=%s: %w", strings.Join(attempted, ","), lastErr)
+}
+
+type allCoolingDownError struct {
+	until time.Time
+}
+
+func (e *allCoolingDownError) Error() string {
+	return fmt.Sprintf("all models are cooling down after quota errors until %s", e.until.Format(time.RFC3339))
 }
 
 func addProviderMeta(responseBody []byte, requestedModel string, attemptedModels []string) ([]byte, error) {
@@ -366,5 +404,6 @@ func (g *Gateway) Handler() http.Handler {
 	mux.HandleFunc("/v1/models", g.ModelsHandler)
 	mux.HandleFunc("/v1/models/", g.ModelsByProviderHandler)
 	mux.HandleFunc("/v1/chat/completions", g.ChatCompletionsHandler)
+	mux.HandleFunc("/v1/usage", g.UsageHandler)
 	return mux
 }

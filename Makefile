@@ -7,7 +7,7 @@ PROVIDER ?= ollama
 PROMPT ?= Hello
 escape_squote = $(subst ','\'',$(1))
 
-.PHONY: help run test curl-health curl-models curl-models-all curl-chat curl-chat-with-model curl-chat-with-provider
+.PHONY: help run test curl-health curl-models curl-models-all curl-usage curl-chat curl-chat-with-model curl-chat-with-provider
 
 help:
 	@echo "Targets:"
@@ -16,6 +16,7 @@ help:
 	@echo "  make curl-health        - GET /healthz"
 	@echo "  make curl-models        - GET /aigate/v1/models"
 	@echo "  make curl-models-all    - GET /aigate/v1/models?all"
+	@echo "  make curl-usage         - GET /aigate/v1/usage"
 	@echo "  make curl-chat            - POST /aigate/v1/chat/completions (without model)"
 	@echo "  make curl-chat-with-model - POST /aigate/v1/chat/completions (with model)"
 	@echo "  make curl-chat-with-provider - POST /aigate/v1/chat/completions (with provider-only model)"
@@ -42,6 +43,9 @@ curl-models:
 
 curl-models-all:
 	curl -sS "$(AIGATE_URL)/v1/models?all" | jq
+
+curl-usage:
+	curl -sS $(AIGATE_URL)/v1/usage | jq
 
 curl-chat:
 	@PROMPT_JSON="$$(printf '%s' '$(call escape_squote,$(PROMPT))' | python3 -c 'import json,sys; print(json.dumps(sys.stdin.read()))')"; \

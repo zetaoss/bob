@@ -31,7 +31,7 @@ func TestLoadConfig_AIGateDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !*cfg.AIGate.ValidateModelsOnStartup || cfg.AIGate.Fallback.Rounds != 2 || cfg.AIGate.Fallback.PerAttemptTimeout == 0 {
+	if !*cfg.AIGate.ValidateModelsOnStartup || *cfg.AIGate.Fallback.MaxFallbacks != 2 || cfg.AIGate.Fallback.PerAttemptTimeout == 0 {
 		t.Fatalf("unexpected aigate defaults: %+v", cfg.AIGate)
 	}
 }
@@ -61,7 +61,7 @@ func TestLoadConfig_Rejects(t *testing.T) {
 }
 
 func TestLoadConfig_RejectsUnknownKeys(t *testing.T) {
-	if _, err := load(t, "proxies:\n  search: http://search\naigate:\n  fallbak: {rounds: 3}\n"); err == nil {
+	if _, err := load(t, "proxies:\n  search: http://search\naigate:\n  fallbak: {maxFallbacks: 3}\n"); err == nil {
 		t.Fatal("expected error for misspelled key")
 	}
 }
@@ -136,5 +136,32 @@ func TestLoadConfig_Runbox(t *testing.T) {
 
 	if _, err := load(t, "runbox:\n  dockerHost: unix:///var/run/docker.sock\n"); err != nil {
 		t.Fatalf("unix dockerHost without certs: %v", err)
+	}
+}
+
+func TestLoadConfig_CloudflareAccountID(t *testing.T) {
+	t.Setenv("BOB_TEST_ACCOUNT", "acct-1")
+	cfg, err := load(t, "aigate:\n  models: [cloudflare/@cf/x]\n  providers:\n    cloudflare: {apiKey: k, accountId: \"${BOB_TEST_ACCOUNT}\"}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AIGate.Providers["cloudflare"].AccountID != "acct-1" {
+		t.Fatalf("accountId not expanded: %+v", cfg.AIGate.Providers["cloudflare"])
+	}
+	if _, err := load(t, "aigate:\n  models: [cloudflare/@cf/x]\n  providers:\n    cloudflare: {apiKey: k}\n"); err == nil {
+		t.Fatal("expected an error without cloudflare accountId")
+	}
+}
+
+func TestLoadConfig_MaxFallbacks(t *testing.T) {
+	cfg, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: k}\n  fallback: {maxFallbacks: 0}\n")
+	if err != nil || *cfg.AIGate.Fallback.MaxFallbacks != 0 {
+		t.Fatalf("expected maxFallbacks 0 to be kept, got %v %v", cfg, err)
+	}
+	if _, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: k}\n  fallback: {maxFallbacks: -1}\n"); err == nil {
+		t.Fatal("expected an error for negative maxFallbacks")
+	}
+	if _, err := load(t, "aigate:\n  models: [gemini/x]\n  providers:\n    gemini: {apiKey: k}\n  fallback: {rounds: 2}\n"); err == nil {
+		t.Fatal("expected the removed rounds key to be rejected")
 	}
 }

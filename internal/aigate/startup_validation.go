@@ -79,6 +79,10 @@ func (g *Gateway) fetchAvailableModels(ctx context.Context, provider string) ([]
 		return g.fetchOllamaModels(ctx)
 	case "gemini":
 		return g.fetchGeminiModels(ctx)
+	case "groq":
+		return g.fetchGroqModels(ctx)
+	case "cloudflare":
+		return g.fetchCloudflareModels(ctx)
 	default:
 		return nil, fmt.Errorf("unsupported provider")
 	}
@@ -156,6 +160,85 @@ func (g *Gateway) fetchGeminiModels(ctx context.Context) ([]string, error) {
 		name = strings.TrimPrefix(name, "models/")
 		if name != "" {
 			models = append(models, name)
+		}
+	}
+	slices.Sort(models)
+	return models, nil
+}
+
+var groqModelsEndpoint = "https://api.groq.com/openai/v1/models"
+
+func (g *Gateway) fetchGroqModels(ctx context.Context) ([]string, error) {
+	provider := g.providerMap["groq"]
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, groqModelsEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	if provider.APIKey != "" {
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", provider.APIKey))
+	}
+	respBytes, status, err := doHTTP(req, 20*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	if status >= 400 {
+		return nil, fmt.Errorf("status=%d", status)
+	}
+
+	var payload struct {
+		Data []struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(respBytes, &payload); err != nil {
+		return nil, err
+	}
+
+	models := make([]string, 0, len(payload.Data))
+	for _, model := range payload.Data {
+		if id := strings.TrimSpace(model.ID); id != "" {
+			models = append(models, id)
+		}
+	}
+	slices.Sort(models)
+	return models, nil
+}
+
+// fetchCloudflareModels lists Workers AI text generation models (names such as @cf/openai/gpt-oss-120b).
+func (g *Gateway) fetchCloudflareModels(ctx context.Context) ([]string, error) {
+	provider := g.providerMap["cloudflare"]
+	const perPage = 100
+	var models []string
+	for page := 1; ; page++ {
+		endpoint := fmt.Sprintf("%s/accounts/%s/ai/models/search?task=%s&per_page=%d&page=%d",
+			cloudflareAPIBase, url.PathEscape(provider.AccountID), url.QueryEscape("Text Generation"), perPage, page)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", provider.APIKey))
+		respBytes, status, err := doHTTP(req, 20*time.Second)
+		if err != nil {
+			return nil, err
+		}
+		if status >= 400 {
+			return nil, fmt.Errorf("status=%d", status)
+		}
+		var payload struct {
+			Result []struct {
+				Name string `json:"name"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(respBytes, &payload); err != nil {
+			return nil, err
+		}
+		for _, m := range payload.Result {
+			if name := strings.TrimSpace(m.Name); name != "" {
+				models = append(models, name)
+			}
+		}
+		if len(payload.Result) < perPage {
+			break
 		}
 	}
 	slices.Sort(models)
