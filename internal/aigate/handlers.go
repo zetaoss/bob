@@ -5,15 +5,17 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"bob/internal/config"
 )
 
-// Gateway routes OpenAI-style chat completions to configured providers with fallback.
+// Gateway routes OpenAI-style chat completions to configured providers, with fallback across models on request.
 // Moved from github.com/zetaoss/aigate; bob serves it under /aigate.
 type Gateway struct {
 	cfg                  *config.AIGateConfig
@@ -41,8 +43,8 @@ type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
-	// Fallback false limits the chain to the requested model. It is not sent to providers.
-	Fallback *bool `json:"fallback,omitempty"`
+	// Fallback true lets a request for a configured model fall back to the other models. It is not sent to providers.
+	Fallback bool `json:"fallback,omitempty"`
 }
 
 type Message struct {
@@ -240,7 +242,7 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	modelChain, badModel := g.resolveModelChain(req.Model)
+	modelChain, badModel := g.resolveModelChain(req.Model, req.Fallback)
 	if badModel {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "model not configured", "model": req.Model})
 		return
@@ -249,18 +251,12 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "no models configured"})
 		return
 	}
-	if req.Fallback != nil && !*req.Fallback {
-		if _, isModel := g.modelRoutes[req.Model]; !isModel {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "fallback false requires a configured model", "model": req.Model})
-			return
-		}
-		modelChain = modelChain[:1]
-	}
 
 	responseBody, resolvedModel, attemptedModels, err := g.callWithFallback(req, modelChain)
 	var cooling *allCoolingDownError
 	if errors.As(err, &cooling) {
 		g.log.Error("chat completion skipped: all models cooling down", "model", req.Model, "until", cooling.until)
+		w.Header().Set("Retry-After", strconv.Itoa(max(int(math.Ceil(time.Until(cooling.until).Seconds())), 1)))
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": err.Error(), "retry_after": cooling.until})
 		return
 	}
@@ -282,7 +278,9 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 	_, _ = w.Write(responseBody)
 }
 
-func (g *Gateway) resolveModelChain(requestedModel string) ([]string, bool) {
+// resolveModelChain returns the models to try: every configured model when none is requested, a provider's
+// models for a provider name, and for a configured model that model alone, or followed by the rest with fallback.
+func (g *Gateway) resolveModelChain(requestedModel string, fallback bool) ([]string, bool) {
 	if requestedModel == "" {
 		return append([]string(nil), g.modelOrder...), false
 	}
@@ -303,6 +301,9 @@ func (g *Gateway) resolveModelChain(requestedModel string) ([]string, bool) {
 		return nil, true
 	}
 	chain := []string{requestedModel}
+	if !fallback {
+		return chain, false
+	}
 	for _, model := range g.modelOrder {
 		if model == requestedModel {
 			continue

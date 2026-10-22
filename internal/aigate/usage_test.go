@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -122,22 +123,28 @@ func newTestGateway(t *testing.T, fake *fakeGemini) *Gateway {
 
 func chat(t *testing.T, g *Gateway, body string) (int, map[string]any) {
 	t.Helper()
+	code, payload, _ := chatWithHeader(t, g, body)
+	return code, payload
+}
+
+func chatWithHeader(t *testing.T, g *Gateway, body string) (int, map[string]any, http.Header) {
+	t.Helper()
 	rec := httptest.NewRecorder()
 	g.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
 	var payload map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &payload)
-	return rec.Code, payload
+	return rec.Code, payload, rec.Header()
 }
 
 func TestChatSkipsModelsCoolingDown(t *testing.T) {
 	fake := &fakeGemini{calls: map[string]int{}, fail: map[string]bool{"a": true}}
 	g := newTestGateway(t, fake)
 
-	code, payload := chat(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
+	code, payload := chat(t, g, `{"model":"gemini/a","fallback":true,"messages":[{"role":"user","content":"x"}]}`)
 	if code != http.StatusOK || payload["model"] != "gemini/b" {
 		t.Fatalf("expected fallback to gemini/b, got %d %v", code, payload)
 	}
-	code, _ = chat(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
+	code, _ = chat(t, g, `{"model":"gemini/a","fallback":true,"messages":[{"role":"user","content":"x"}]}`)
 	if code != http.StatusOK || fake.calls["a"] != 1 || fake.calls["b"] != 2 {
 		t.Fatalf("expected gemini/a skipped while cooling down, got %d calls=%v", code, fake.calls)
 	}
@@ -159,24 +166,28 @@ func TestChatSkipsModelsCoolingDown(t *testing.T) {
 	}
 }
 
-func TestChatFallbackFalse(t *testing.T) {
+func TestChatConfiguredModelDoesNotFallBack(t *testing.T) {
 	fake := &fakeGemini{calls: map[string]int{}, fail: map[string]bool{"a": true}}
 	g := newTestGateway(t, fake)
 
-	code, _ := chat(t, g, `{"model":"gemini/a","fallback":false,"messages":[{"role":"user","content":"x"}]}`)
+	code, _ := chat(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
 	if code != http.StatusBadGateway || fake.calls["b"] != 0 {
 		t.Fatalf("expected failure without fallback, got %d calls=%v", code, fake.calls)
 	}
-	code, payload := chat(t, g, `{"model":"gemini/a","fallback":false,"messages":[{"role":"user","content":"x"}]}`)
+	code, payload, header := chatWithHeader(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
 	if code != http.StatusTooManyRequests || payload["retry_after"] == nil || fake.calls["a"] != 1 {
 		t.Fatalf("expected 429 while cooling down, got %d %v calls=%v", code, payload, fake.calls)
 	}
-	code, _ = chat(t, g, `{"model":"gemini","fallback":false,"messages":[{"role":"user","content":"x"}]}`)
-	if code != http.StatusBadRequest {
-		t.Fatalf("expected 400 for fallback false with a provider name, got %d", code)
+	if secs, err := strconv.Atoi(header.Get("Retry-After")); err != nil || secs < 55000 {
+		t.Fatalf("expected Retry-After in seconds until the cooldown ends, got %q", header.Get("Retry-After"))
 	}
-	code, payload = chat(t, g, `{"model":"gemini/b","fallback":false,"messages":[{"role":"user","content":"x"}]}`)
+
+	code, payload = chat(t, g, `{"model":"gemini","messages":[{"role":"user","content":"x"}]}`)
 	if code != http.StatusOK || payload["model"] != "gemini/b" {
-		t.Fatalf("expected gemini/b, got %d %v", code, payload)
+		t.Fatalf("expected a provider name to use its models in order, got %d %v", code, payload)
+	}
+	code, payload = chat(t, g, `{"messages":[{"role":"user","content":"x"}]}`)
+	if code != http.StatusOK || payload["model"] != "gemini/b" {
+		t.Fatalf("expected an omitted model to use every model in order, got %d %v", code, payload)
 	}
 }

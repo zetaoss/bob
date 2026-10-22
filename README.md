@@ -8,7 +8,7 @@ only zengine calls it.
 | Route | Handled by |
 | --- | --- |
 | `/healthz` | bob |
-| `/aigate/` | bob: LLM routing with fallback across providers (moved from [aigate](https://github.com/zetaoss/aigate)) |
+| `/aigate/` | bob: LLM routing across providers, with fallback across models (moved from [aigate](https://github.com/zetaoss/aigate)) |
 | `/search/` | bob: result counts across search engines (moved from [queryhub](https://github.com/zetaoss/queryhub)) |
 | `/metrics/` | bob: named PromQL queries from the config, run against Prometheus |
 | `/cloudflare/` | bob: Cloudflare zone analytics per hour or day |
@@ -31,11 +31,12 @@ See [`config.example.yaml`](config.example.yaml).
   - Providers: `gemini`, `ollama` (endpoints are fixed in code).
   - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
   - `fallback.rounds` (default `2`) is how many passes over the model chain are tried; `fallback.perAttemptTimeout` (default `30s`) is the per-attempt HTTP timeout.
-  - `model` may be omitted (configured order), a provider name (that provider's models), or a configured model (tried first, then the rest).
-    `"fallback": false` with a configured model tries only that model (for callers whose results must not come from another model).
+  - `model` may be omitted (every configured model in order), a provider name (that provider's models in order), or a configured model
+    (only that model). Add `"fallback": true` to let a configured model fall back to the rest in configured order; the response's `model`
+    and `provider_meta.attempted_models` show which model answered.
   - Calls are counted per model for the current quota day (Gemini daily quotas reset at midnight Pacific time). A `429` from a provider
     puts the model in a cooldown taken from the error's `retryDelay`, or until the next reset for a daily quota; models in a cooldown are
-    skipped, and if every model in the chain is, the request returns `429` with `retry_after`. A daily quota error's `quotaValue` is
+    skipped, and if every model in the chain is, the request returns `429` with a `Retry-After` header (seconds) and `retry_after` (time). A daily quota error's `quotaValue` is
     remembered as the model's daily limit. Gemini has no API for remaining quota, so this is bob's own count, kept in memory and reset
     on restart.
 - `search` holds search API credentials. Each engine is used only when its credentials are set
