@@ -31,10 +31,9 @@ See [`config.example.yaml`](config.example.yaml).
   - Providers: `gemini`, `groq`, `ollama` (endpoints are fixed in code). Groq model IDs keep their own `/`, as in `groq/openai/gpt-oss-120b`.
   - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
   - `fallback.rounds` (default `2`) is how many passes over the model chain are tried; `fallback.perAttemptTimeout` (default `30s`) is the per-attempt HTTP timeout.
-  - Only one model is tried unless the request sets `"fallback": true`: the first configured model when `model` is omitted, the
-    provider's first model for a provider name, or the requested model. With `"fallback": true` the next models follow in configured
-    order (every model, the provider's models, or every other model); the response's `model` and `provider_meta.attempted_models`
-    show which model answered.
+  - `model` may be omitted (every configured model in order), a provider name (that provider's models in order), or a configured model
+    (only that model). Add `"fallback": true` to let a configured model fall back to the rest in configured order; the response's `model`
+    and `provider_meta.attempted_models` show which model answered.
   - Calls are counted per model for the current quota day (Gemini daily quotas reset at midnight Pacific time). A `429` from a provider
     puts the model in a cooldown taken from the error's `retryDelay` (Gemini) or the `Retry-After` header (Groq), or until the next reset for a daily quota; models in a cooldown are
     skipped, and if every model in the chain is, the request returns `429` with a `Retry-After` header (seconds) and `retry_after` (time). A daily quota error's `quotaValue` is

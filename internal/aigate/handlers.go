@@ -43,8 +43,7 @@ type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
-	// Fallback true lets the request fall back to the next models in configured order; without it only one
-	// model is tried. It is not sent to providers.
+	// Fallback true lets a request for a configured model fall back to the other models. It is not sent to providers.
 	Fallback bool `json:"fallback,omitempty"`
 }
 
@@ -279,18 +278,9 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 	_, _ = w.Write(responseBody)
 }
 
-// resolveModelChain returns the models to try. Without fallback it is a single model: the first configured
-// model when none is requested, a provider's first model for a provider name, or the requested model. With
-// fallback the rest follow in configured order: every model, the provider's models, or every other model.
+// resolveModelChain returns the models to try: every configured model when none is requested, a provider's
+// models for a provider name, and for a configured model that model alone, or followed by the rest with fallback.
 func (g *Gateway) resolveModelChain(requestedModel string, fallback bool) ([]string, bool) {
-	chain, bad := g.fullModelChain(requestedModel)
-	if bad || fallback || len(chain) == 0 {
-		return chain, bad
-	}
-	return chain[:1], false
-}
-
-func (g *Gateway) fullModelChain(requestedModel string) ([]string, bool) {
 	if requestedModel == "" {
 		return append([]string(nil), g.modelOrder...), false
 	}
@@ -311,6 +301,9 @@ func (g *Gateway) fullModelChain(requestedModel string) ([]string, bool) {
 		return nil, true
 	}
 	chain := []string{requestedModel}
+	if !fallback {
+		return chain, false
+	}
 	for _, model := range g.modelOrder {
 		if model == requestedModel {
 			continue
