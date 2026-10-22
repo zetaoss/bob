@@ -411,3 +411,21 @@ func TestChatMaxFallbacks(t *testing.T) {
 		t.Fatalf("expected one call each to a, c, d, got %v", calls)
 	}
 }
+
+func TestUnavailableCooldown(t *testing.T) {
+	now := time.Date(2026, 10, 22, 12, 0, 0, 0, quotaLoc)
+	u := newUsageTracker(func() time.Time { return now })
+	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusServiceUnavailable, Err: errors.New("high demand")})
+	if until, cooling := u.coolingDown("gemini/a"); !cooling || !until.Equal(now.Add(unavailableCooldown)) {
+		t.Fatalf("expected a %s cooldown after 503, got %v %v", unavailableCooldown, until, cooling)
+	}
+	now = now.Add(unavailableCooldown)
+	if _, cooling := u.coolingDown("gemini/a"); cooling {
+		t.Fatal("expected the cooldown to end")
+	}
+	// A 500 is not a cooldown: it may be about the request, not the model.
+	u.record("gemini/a", nil, &providerCallError{StatusCode: http.StatusInternalServerError, Err: errors.New("boom")})
+	if _, cooling := u.coolingDown("gemini/a"); cooling {
+		t.Fatal("expected no cooldown after 500")
+	}
+}

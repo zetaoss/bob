@@ -11,6 +11,10 @@ import (
 	"time"
 )
 
+// unavailableCooldown is how long a model that answered 503 (overloaded, such as Gemini's "high demand") is
+// skipped, so following requests go straight to other models while it lasts.
+const unavailableCooldown = time.Minute
+
 // Gemini daily quotas reset at midnight Pacific time.
 var quotaLoc, _ = time.LoadLocation("America/Los_Angeles")
 
@@ -104,6 +108,11 @@ func (u *usageTracker) record(model string, header http.Header, err error) {
 	m := u.entry(model)
 	m.requests++
 	var callErr *providerCallError
+	if errors.As(err, &callErr) && callErr.StatusCode == http.StatusServiceUnavailable {
+		if until := u.now().Add(unavailableCooldown); until.After(m.cooldownUntil) {
+			m.cooldownUntil, m.dailyExhausted = until, false
+		}
+	}
 	if header == nil && errors.As(err, &callErr) {
 		header = callErr.Header
 	}
