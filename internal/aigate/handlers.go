@@ -317,17 +317,19 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 	if len(modelChain) == 0 {
 		return nil, "", nil, fmt.Errorf("no models configured")
 	}
-	fallbackRounds := g.cfg.Fallback.Rounds
-	if fallbackRounds < 1 {
-		fallbackRounds = 2
+	// One pass over the chain, calling at most the first available model and MaxFallbacks more.
+	maxCalls := 1
+	if g.cfg.Fallback.MaxFallbacks != nil {
+		maxCalls += *g.cfg.Fallback.MaxFallbacks
 	}
-	attemptLimit := len(modelChain) * fallbackRounds
-	attempted := make([]string, 0, attemptLimit)
+	attempted := make([]string, 0, maxCalls)
 	var lastErr error
 	var earliestRetry time.Time
 
-	for i := 0; i < attemptLimit; i++ {
-		modelID := modelChain[i%len(modelChain)]
+	for _, modelID := range modelChain {
+		if len(attempted) >= maxCalls {
+			break
+		}
 		if until, cooling := g.usage.coolingDown(modelID); cooling {
 			if earliestRetry.IsZero() || until.Before(earliestRetry) {
 				earliestRetry = until

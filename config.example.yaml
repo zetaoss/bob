@@ -9,7 +9,7 @@ server:
 aigate:
   validateModelsOnStartup: true
   fallback:
-    rounds: 2
+    maxFallbacks: 2
     perAttemptTimeout: 30s
   models:
     # fallback priority: first model is tried first

@@ -32,7 +32,9 @@ See [`config.example.yaml`](config.example.yaml).
     Model IDs keep their own `/`, as in `groq/openai/gpt-oss-120b` or `cloudflare/@cf/openai/gpt-oss-120b`; Workers AI lists only its
     Text Generation models.
   - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
-  - `fallback.rounds` (default `2`) is how many passes over the model chain are tried; `fallback.perAttemptTimeout` (default `30s`) is the per-attempt HTTP timeout.
+  - `fallback.maxFallbacks` (default `2`) is how many other models a request may fall back to after the first model it calls, in one
+    pass over the chain; models skipped while cooling down do not count, and `0` disables fallback. `fallback.perAttemptTimeout` (default
+    `30s`) is the per-attempt HTTP timeout.
   - `model` may be omitted (every configured model in order), a provider name (that provider's models in order), or a configured model
     (only that model). Add `"fallback": true` to let a configured model fall back to the rest in configured order; the response's `model`
     and `provider_meta.attempted_models` show which model answered.

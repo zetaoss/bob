@@ -126,7 +126,9 @@ type ProviderConfig struct {
 }
 
 type FallbackConfig struct {
-	Rounds            int           `yaml:"rounds"`
+	// MaxFallbacks is how many other models a request may fall back to after the first one it calls.
+	// Models skipped while cooling down do not count. nil means the default (2); 0 means no fallback.
+	MaxFallbacks      *int          `yaml:"maxFallbacks"`
 	PerAttemptTimeout time.Duration `yaml:"perAttemptTimeout"`
 }
 
@@ -270,11 +272,12 @@ func normalizeAIGate(c *AIGateConfig) error {
 		defaultValue := true
 		c.ValidateModelsOnStartup = &defaultValue
 	}
-	if c.Fallback.Rounds == 0 {
-		c.Fallback.Rounds = 2
+	if c.Fallback.MaxFallbacks == nil {
+		defaultValue := 2
+		c.Fallback.MaxFallbacks = &defaultValue
 	}
-	if c.Fallback.Rounds < 1 {
-		return fmt.Errorf("config aigate.fallback.rounds must be >= 1")
+	if *c.Fallback.MaxFallbacks < 0 {
+		return fmt.Errorf("config aigate.fallback.maxFallbacks must be >= 0")
 	}
 	if c.Fallback.PerAttemptTimeout == 0 {
 		c.Fallback.PerAttemptTimeout = 30 * time.Second

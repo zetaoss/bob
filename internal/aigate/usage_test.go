@@ -123,7 +123,7 @@ func newTestGateway(t *testing.T, fake *fakeGemini) *Gateway {
 	cfg := &config.AIGateConfig{
 		Models:    []string{"gemini/a", "gemini/b"},
 		Providers: map[string]config.ProviderConfig{"gemini": {}},
-		Fallback:  config.FallbackConfig{Rounds: 2, PerAttemptTimeout: 5 * time.Second},
+		Fallback:  config.FallbackConfig{MaxFallbacks: intPtr(2), PerAttemptTimeout: 5 * time.Second},
 	}
 	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -238,7 +238,7 @@ func TestGroqReportedQuota(t *testing.T) {
 	cfg := &config.AIGateConfig{
 		Models:    []string{"groq/openai/gpt-oss-20b"},
 		Providers: map[string]config.ProviderConfig{"groq": {APIKey: "groq-key"}},
-		Fallback:  config.FallbackConfig{Rounds: 2, PerAttemptTimeout: 5 * time.Second},
+		Fallback:  config.FallbackConfig{MaxFallbacks: intPtr(2), PerAttemptTimeout: 5 * time.Second},
 	}
 	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -344,7 +344,7 @@ func TestCloudflareWorkersAI(t *testing.T) {
 	cfg := &config.AIGateConfig{
 		Models:    []string{"cloudflare/@cf/openai/gpt-oss-120b"},
 		Providers: map[string]config.ProviderConfig{"cloudflare": {APIKey: "cf-token", AccountID: "acct"}},
-		Fallback:  config.FallbackConfig{Rounds: 2, PerAttemptTimeout: 5 * time.Second},
+		Fallback:  config.FallbackConfig{MaxFallbacks: intPtr(2), PerAttemptTimeout: 5 * time.Second},
 	}
 	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err != nil {
@@ -362,5 +362,45 @@ func TestCloudflareWorkersAI(t *testing.T) {
 	}
 	if gotPath != "/accounts/acct/ai/v1/chat/completions" || gotModel != "@cf/openai/gpt-oss-120b" {
 		t.Fatalf("unexpected upstream request: %s %s", gotPath, gotModel)
+	}
+}
+
+func intPtr(v int) *int { return &v }
+
+func TestChatMaxFallbacks(t *testing.T) {
+	var mu sync.Mutex
+	calls := map[string]int{}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		calls[req.Model]++
+		mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+	old := geminiDefaultEndpoint
+	geminiDefaultEndpoint = ts.URL
+	t.Cleanup(func() { geminiDefaultEndpoint = old })
+
+	cfg := &config.AIGateConfig{
+		Models:    []string{"gemini/a", "gemini/b", "gemini/c", "gemini/d", "gemini/e"},
+		Providers: map[string]config.ProviderConfig{"gemini": {}},
+		Fallback:  config.FallbackConfig{MaxFallbacks: intPtr(2), PerAttemptTimeout: 5 * time.Second},
+	}
+	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// gemini/b is cooling down, so it is skipped and not counted: a, c, d are called, e is not.
+	g.usage.models["gemini/b"] = &modelUsage{cooldownUntil: time.Now().Add(time.Hour)}
+
+	if code, _ := chat(t, g, `{"messages":[{"role":"user","content":"x"}]}`); code != http.StatusBadGateway {
+		t.Fatalf("expected all calls to fail, got %d", code)
+	}
+	if calls["a"] != 1 || calls["b"] != 0 || calls["c"] != 1 || calls["d"] != 1 || calls["e"] != 0 {
+		t.Fatalf("expected one call each to a, c, d, got %v", calls)
 	}
 }
