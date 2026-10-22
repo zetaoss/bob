@@ -282,7 +282,7 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 // models for a provider name, and for a configured model that model alone, or followed by the rest with fallback.
 func (g *Gateway) resolveModelChain(requestedModel string, fallback bool) ([]string, bool) {
 	if requestedModel == "" {
-		return append([]string(nil), g.modelOrder...), false
+		return g.interleaveByProvider(g.modelOrder), false
 	}
 	if _, isProvider := g.providerMap[requestedModel]; isProvider {
 		providerChain := make([]string, 0)
@@ -310,7 +310,32 @@ func (g *Gateway) resolveModelChain(requestedModel string, fallback bool) ([]str
 		}
 		chain = append(chain, model)
 	}
-	return chain, false
+	return g.interleaveByProvider(chain), false
+}
+
+// interleaveByProvider reorders a fallback chain so consecutive models come from different providers, keeping
+// the first model first: providers take turns in order of first appearance, each in its configured order.
+// One provider's outage (such as every Gemini model answering 503) then does not use up all the fallbacks.
+func (g *Gateway) interleaveByProvider(chain []string) []string {
+	var providers []string
+	byProvider := map[string][]string{}
+	for _, model := range chain {
+		p := g.modelRoutes[model].Provider
+		if _, seen := byProvider[p]; !seen {
+			providers = append(providers, p)
+		}
+		byProvider[p] = append(byProvider[p], model)
+	}
+	out := make([]string, 0, len(chain))
+	for len(out) < len(chain) {
+		for _, p := range providers {
+			if models := byProvider[p]; len(models) > 0 {
+				out = append(out, models[0])
+				byProvider[p] = models[1:]
+			}
+		}
+	}
+	return out
 }
 
 func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []string) ([]byte, string, []string, error) {

@@ -429,3 +429,32 @@ func TestUnavailableCooldown(t *testing.T) {
 		t.Fatal("expected no cooldown after 500")
 	}
 }
+
+func TestFallbackChainInterleavesProviders(t *testing.T) {
+	cfg := &config.AIGateConfig{
+		Models: []string{"gemini/g1", "gemini/g2", "gemini/g3", "groq/q1", "cloudflare/c1", "groq/q2"},
+		Providers: map[string]config.ProviderConfig{
+			"gemini": {}, "groq": {}, "cloudflare": {AccountID: "a"},
+		},
+	}
+	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		model    string
+		fallback bool
+		want     string
+	}{
+		{"", false, "gemini/g1,groq/q1,cloudflare/c1,gemini/g2,groq/q2,gemini/g3"},
+		{"groq/q1", true, "groq/q1,gemini/g1,cloudflare/c1,groq/q2,gemini/g2,gemini/g3"},
+		{"groq/q1", false, "groq/q1"},
+		{"gemini", false, "gemini/g1,gemini/g2,gemini/g3"},
+	}
+	for _, c := range cases {
+		chain, bad := g.resolveModelChain(c.model, c.fallback)
+		if bad || strings.Join(chain, ",") != c.want {
+			t.Errorf("model %q fallback %v: got %v, want %s", c.model, c.fallback, chain, c.want)
+		}
+	}
+}

@@ -38,6 +38,9 @@ See [`config.example.yaml`](config.example.yaml).
   - `model` may be omitted (every configured model in order), a provider name (that provider's models in order), or a configured model
     (only that model). Add `"fallback": true` to let a configured model fall back to the rest in configured order; the response's `model`
     and `provider_meta.attempted_models` show which model answered.
+  - A fallback chain across providers alternates them: after the first model, providers take turns in order of first appearance,
+    each in its configured order (`a1, a2, b1, c1` falls back as `a1, b1, c1, a2`), so one provider's outage does not use up the
+    fallbacks. A provider name keeps that provider's order.
   - Calls are counted per model for the current quota day (Gemini daily quotas reset at midnight Pacific time). A `429` from a provider
     puts the model in a cooldown taken from the error's `retryDelay` (Gemini) or the `Retry-After` header (Groq), or until the next reset for a daily quota; a `503` (overloaded) puts it in a one-minute cooldown; models in a cooldown are
     skipped, and if every model in the chain is, the request returns `429` with a `Retry-After` header (seconds) and `retry_after` (time). A daily quota error's `quotaValue` is
