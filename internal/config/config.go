@@ -121,6 +121,8 @@ func (c SearchConfig) Enabled() bool {
 
 type ProviderConfig struct {
 	APIKey string `yaml:"apiKey"`
+	// AccountID is the Cloudflare account for the cloudflare provider (Workers AI).
+	AccountID string `yaml:"accountId"`
 }
 
 type FallbackConfig struct {
@@ -289,6 +291,14 @@ func normalizeAIGate(c *AIGateConfig) error {
 			return err
 		}
 		provider.APIKey = key
+		accountID, err := expandEnv("aigate.providers."+providerName+".accountId", provider.AccountID)
+		if err != nil {
+			return err
+		}
+		provider.AccountID = accountID
+		if providerName == "cloudflare" && provider.AccountID == "" {
+			return fmt.Errorf("config aigate.providers.cloudflare.accountId is required")
+		}
 		c.Providers[providerName] = provider
 	}
 	return nil

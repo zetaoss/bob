@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"bob/internal/config"
 )
 
 type ollamaRequestBody struct {
@@ -61,10 +64,14 @@ var (
 	geminiDefaultEndpoint = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 	groqDefaultEndpoint   = "https://api.groq.com/openai/v1/chat/completions"
 	ollamaDefaultEndpoint = "https://ollama.com/api/chat"
+	// cloudflareAPIBase is joined with /accounts/{accountId}/ai/... for Workers AI.
+	cloudflareAPIBase = "https://api.cloudflare.com/client/v4"
 )
 
-func defaultProviderEndpoint(provider string) string {
+func providerEndpoint(provider string, cfg config.ProviderConfig) string {
 	switch strings.ToLower(provider) {
+	case "cloudflare":
+		return cloudflareAPIBase + "/accounts/" + url.PathEscape(cfg.AccountID) + "/ai/v1/chat/completions"
 	case "gemini":
 		return geminiDefaultEndpoint
 	case "groq":
@@ -98,7 +105,7 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 		return nil, nil, fmt.Errorf("provider %q not found", route.Provider)
 	}
 
-	endpoint := defaultProviderEndpoint(route.Provider)
+	endpoint := providerEndpoint(route.Provider, provider)
 	if endpoint == "" {
 		return nil, nil, fmt.Errorf("provider %q has no built-in endpoint", route.Provider)
 	}

@@ -22,6 +22,9 @@ aigate:
       apiKey: ${GEMINI_API_KEY}
     groq:
       apiKey: ${GROQ_API_KEY}
+    cloudflare:   # Workers AI
+      apiKey: ${CF_AI_API_TOKEN}
+      accountId: ${CF_AI_ACCOUNT_ID}
     ollama:
       apiKey: ${OLLAMA_API_KEY}
 

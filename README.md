@@ -28,7 +28,9 @@ See [`config.example.yaml`](config.example.yaml).
 - `server.port` defaults to `8080`. `server.logLevel` is `debug`, `info` (default) or `error`; `debug` prints upstream provider requests and responses.
 - `aigate` is enabled when `aigate.models` is non-empty.
   - `models` use `{provider}/{model}` and split on the first `/`. Their order is the fallback priority.
-  - Providers: `gemini`, `groq`, `ollama` (endpoints are fixed in code). Groq model IDs keep their own `/`, as in `groq/openai/gpt-oss-120b`.
+  - Providers: `cloudflare` (Workers AI, needs `accountId` besides `apiKey`), `gemini`, `groq`, `ollama` (endpoints are fixed in code).
+    Model IDs keep their own `/`, as in `groq/openai/gpt-oss-120b` or `cloudflare/@cf/openai/gpt-oss-120b`; Workers AI lists only its
+    Text Generation models.
   - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
   - `fallback.rounds` (default `2`) is how many passes over the model chain are tried; `fallback.perAttemptTimeout` (default `30s`) is the per-attempt HTTP timeout.
   - `model` may be omitted (every configured model in order), a provider name (that provider's models in order), or a configured model

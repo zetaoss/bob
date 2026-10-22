@@ -138,3 +138,17 @@ func TestLoadConfig_Runbox(t *testing.T) {
 		t.Fatalf("unix dockerHost without certs: %v", err)
 	}
 }
+
+func TestLoadConfig_CloudflareAccountID(t *testing.T) {
+	t.Setenv("BOB_TEST_ACCOUNT", "acct-1")
+	cfg, err := load(t, "aigate:\n  models: [cloudflare/@cf/x]\n  providers:\n    cloudflare: {apiKey: k, accountId: \"${BOB_TEST_ACCOUNT}\"}\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AIGate.Providers["cloudflare"].AccountID != "acct-1" {
+		t.Fatalf("accountId not expanded: %+v", cfg.AIGate.Providers["cloudflare"])
+	}
+	if _, err := load(t, "aigate:\n  models: [cloudflare/@cf/x]\n  providers:\n    cloudflare: {apiKey: k}\n"); err == nil {
+		t.Fatal("expected an error without cloudflare accountId")
+	}
+}

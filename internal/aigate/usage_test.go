@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -296,5 +298,69 @@ func TestFetchGroqModels(t *testing.T) {
 	models, err := g.fetchGroqModels(context.Background())
 	if err != nil || strings.Join(models, ",") != "openai/gpt-oss-20b,qwen/qwen3.8-27b" {
 		t.Fatalf("unexpected groq models: %v %v", models, err)
+	}
+}
+
+func TestCloudflareWorkersAI(t *testing.T) {
+	var gotPath, gotModel string
+	pages := 0
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer cf-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.Path {
+		case "/accounts/acct/ai/models/search":
+			if r.URL.Query().Get("task") != "Text Generation" {
+				t.Errorf("unexpected task filter %q", r.URL.Query().Get("task"))
+			}
+			pages++
+			// A full first page, then a short one, to exercise paging.
+			if r.URL.Query().Get("page") == "1" {
+				var items []string
+				for i := range 100 {
+					items = append(items, fmt.Sprintf(`{"name":"@cf/x/model-%03d"}`, i))
+				}
+				_, _ = io.WriteString(w, `{"success":true,"result":[`+strings.Join(items, ",")+`]}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"success":true,"result":[{"name":"@cf/openai/gpt-oss-120b"}]}`)
+		case "/accounts/acct/ai/v1/chat/completions":
+			var req struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			gotPath, gotModel = r.URL.Path, req.Model
+			_, _ = io.WriteString(w, `{"object":"chat.completion","model":"@cf/openai/gpt-oss-120b","choices":[{"message":{"role":"assistant","content":"hi"}}],"usage":{"prompt_tokens":3,"completion_tokens":1,"neurons":0.1}}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	old := cloudflareAPIBase
+	cloudflareAPIBase = ts.URL
+	t.Cleanup(func() { cloudflareAPIBase = old })
+
+	cfg := &config.AIGateConfig{
+		Models:    []string{"cloudflare/@cf/openai/gpt-oss-120b"},
+		Providers: map[string]config.ProviderConfig{"cloudflare": {APIKey: "cf-token", AccountID: "acct"}},
+		Fallback:  config.FallbackConfig{Rounds: 2, PerAttemptTimeout: 5 * time.Second},
+	}
+	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	models, err := g.fetchCloudflareModels(context.Background())
+	if err != nil || len(models) != 101 || pages != 2 || !slices.Contains(models, "@cf/openai/gpt-oss-120b") {
+		t.Fatalf("unexpected cloudflare models: %d models, %d pages, %v", len(models), pages, err)
+	}
+
+	code, payload := chat(t, g, `{"model":"cloudflare/@cf/openai/gpt-oss-120b","messages":[{"role":"user","content":"x"}]}`)
+	if code != http.StatusOK || payload["model"] != "cloudflare/@cf/openai/gpt-oss-120b" {
+		t.Fatalf("unexpected response: %d %v", code, payload)
+	}
+	if gotPath != "/accounts/acct/ai/v1/chat/completions" || gotModel != "@cf/openai/gpt-oss-120b" {
+		t.Fatalf("unexpected upstream request: %s %s", gotPath, gotModel)
 	}
 }
