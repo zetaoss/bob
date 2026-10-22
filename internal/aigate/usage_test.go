@@ -167,7 +167,7 @@ func TestChatSkipsModelsCoolingDown(t *testing.T) {
 	}
 }
 
-func TestChatConfiguredModelDoesNotFallBack(t *testing.T) {
+func TestChatDoesNotFallBackByDefault(t *testing.T) {
 	fake := &fakeGemini{calls: map[string]int{}, fail: map[string]bool{"a": true}}
 	g := newTestGateway(t, fake)
 
@@ -183,13 +183,16 @@ func TestChatConfiguredModelDoesNotFallBack(t *testing.T) {
 		t.Fatalf("expected Retry-After in seconds until the cooldown ends, got %q", header.Get("Retry-After"))
 	}
 
-	code, payload = chat(t, g, `{"model":"gemini","messages":[{"role":"user","content":"x"}]}`)
-	if code != http.StatusOK || payload["model"] != "gemini/b" {
-		t.Fatalf("expected a provider name to use its models in order, got %d %v", code, payload)
+	// An omitted model or a provider name also tries only the first model (gemini/a, cooling down).
+	for _, body := range []string{`{"model":"gemini","messages":[{"role":"user","content":"x"}]}`, `{"messages":[{"role":"user","content":"x"}]}`} {
+		if code, _ := chat(t, g, body); code != http.StatusTooManyRequests || fake.calls["b"] != 0 {
+			t.Fatalf("expected only the first model without fallback, got %d calls=%v for %s", code, fake.calls, body)
+		}
 	}
-	code, payload = chat(t, g, `{"messages":[{"role":"user","content":"x"}]}`)
-	if code != http.StatusOK || payload["model"] != "gemini/b" {
-		t.Fatalf("expected an omitted model to use every model in order, got %d %v", code, payload)
+	for _, body := range []string{`{"model":"gemini","fallback":true,"messages":[{"role":"user","content":"x"}]}`, `{"fallback":true,"messages":[{"role":"user","content":"x"}]}`} {
+		if code, payload := chat(t, g, body); code != http.StatusOK || payload["model"] != "gemini/b" {
+			t.Fatalf("expected fallback to gemini/b, got %d %v for %s", code, payload, body)
+		}
 	}
 }
 
