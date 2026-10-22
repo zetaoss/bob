@@ -67,7 +67,7 @@ method, path, status and duration. API keys and runbox certificates are printed 
 | `GET` | `/aigate/v1/models?all` | models available from providers, with `enabled` |
 | `GET` | `/aigate/v1/models/{provider}` | enabled models of one provider (`?all` as above) |
 | `POST` | `/aigate/v1/chat/completions` | OpenAI-style chat completion; the response adds `provider_meta` (`requested_model`, `attempted_models`) |
-| `GET` | `/aigate/v1/usage` | per model for the current quota day: `requests`, `successes`, `failures`, `daily_limit` and `remaining` (once learned from a `429`), `available`, `cooldown_until`, `last_error`; plus `quota_day` and `next_reset` |
+| `GET` | `/aigate/v1/usage` | per model for the current quota day: `requests`, `successes`, `failures`, `daily_limit` and `remaining` (once learned from a `429`; every call except a `429` rejection counts against it), `available`, `cooldown_until`, `last_error`; plus `quota_day` and `next_reset` |
 
 ```sh
 curl -X POST http://localhost:8080/aigate/v1/chat/completions \

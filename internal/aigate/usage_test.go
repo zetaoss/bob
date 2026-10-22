@@ -67,6 +67,14 @@ func TestUsageTrackerQuotaDay(t *testing.T) {
 	if got.Requests != 0 || !got.Available || *got.DailyLimit != 20 || *got.Remaining != 20 {
 		t.Fatalf("expected counters reset on a new quota day, got %+v", got)
 	}
+
+	// Every call except a 429 rejection counts against the learned limit, including other errors.
+	u.record("gemini/a", &providerCallError{StatusCode: http.StatusInternalServerError, Err: errors.New("boom")})
+	u.record("gemini/a", nil)
+	got = u.snapshot([]string{"gemini/a"}, routes)[0]
+	if got.Requests != 2 || *got.Remaining != 18 {
+		t.Fatalf("expected the 500 and the success counted, got %+v remaining=%d", got, *got.Remaining)
+	}
 }
 
 type fakeGemini struct {

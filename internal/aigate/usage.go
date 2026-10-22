@@ -27,6 +27,7 @@ type modelUsage struct {
 	requests      int
 	successes     int
 	failures      int
+	rejected      int
 	dailyLimit    int
 	cooldownUntil time.Time
 	lastError     string
@@ -63,7 +64,7 @@ func (u *usageTracker) entry(model string) *modelUsage {
 	if day := quotaDay(u.now()); day != u.day {
 		u.day = day
 		for _, m := range u.models {
-			m.requests, m.successes, m.failures = 0, 0, 0
+			m.requests, m.successes, m.failures, m.rejected = 0, 0, 0, 0
 		}
 	}
 	m, ok := u.models[model]
@@ -101,6 +102,7 @@ func (u *usageTracker) record(model string, err error) {
 	if !errors.As(err, &callErr) || callErr.StatusCode != http.StatusTooManyRequests {
 		return
 	}
+	m.rejected++
 	q := parseQuotaError(callErr.Body)
 	if q.daily && q.limit > 0 {
 		m.dailyLimit = q.limit
@@ -131,7 +133,8 @@ func (u *usageTracker) snapshot(models []string, routes map[string]ModelRoute) [
 		}
 		if m.dailyLimit > 0 {
 			limit := m.dailyLimit
-			remaining := max(limit-m.successes, 0)
+			// Every call except a 429 rejection may count against the quota, including other errors and timeouts.
+			remaining := max(limit-(m.requests-m.rejected), 0)
 			if !item.Available {
 				remaining = 0
 			}
