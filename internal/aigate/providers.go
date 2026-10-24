@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -161,16 +162,78 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 	g.log.Debug("provider response", "provider", route.Provider, "status", resp.StatusCode, "body", string(respBytes))
 
 	if resp.StatusCode >= 400 {
-		g.log.Error("provider error", "provider", route.Provider, "status", resp.StatusCode)
+		// The whole body stays in the log; callers get providerMessage.
+		g.log.Error("provider error", "provider", route.Provider, "status", resp.StatusCode, "body", truncate(string(respBytes), 2000))
 		return nil, nil, &providerCallError{
 			StatusCode: resp.StatusCode,
 			Body:       respBytes,
 			Header:     resp.Header,
-			Err:        fmt.Errorf("provider %s returned status %d: %s", route.Provider, resp.StatusCode, strings.TrimSpace(string(respBytes))),
+			Err:        fmt.Errorf("provider %s returned status %d: %s", route.Provider, resp.StatusCode, providerMessage(respBytes)),
 		}
 	}
 
 	return respBytes, resp.Header, nil
+}
+
+var (
+	// IDs providers put in messages, Groq organizations (with Groq's "in organization `org_…`" phrase) and
+	// Cloudflare accounts in API paths, and URLs and Groq's upsell that add nothing.
+	orgIDPattern       = regexp.MustCompile("org_[A-Za-z0-9]+")
+	accountPathPattern = regexp.MustCompile(`/accounts/[A-Za-z0-9]+`)
+	inOrgPattern       = regexp.MustCompile(" in organization `[^`]*`")
+	urlPattern         = regexp.MustCompile(`https?://\S+`)
+	upsellPattern      = regexp.MustCompile(`\s*Need more tokens\?.*$`)
+)
+
+const maxProviderMessage = 300
+
+// providerMessage is the message of a provider's error response for callers, which keep it in run records and
+// show it: the error message out of the JSON (an error object, a list of them, or Cloudflare's errors), without
+// account or organization IDs and URLs, or the trimmed body when it is not JSON. The usage tracker reads the
+// body itself, and the log keeps it whole.
+func providerMessage(body []byte) string {
+	msg := strings.TrimSpace(string(body))
+	type errObj struct {
+		Error any `json:"error"`
+	}
+	var one errObj
+	var list []errObj
+	var cf struct {
+		Errors []struct {
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	switch {
+	case json.Unmarshal(body, &one) == nil && one.Error != nil:
+		msg = errorText(one.Error, msg)
+	case json.Unmarshal(body, &list) == nil && len(list) > 0 && list[0].Error != nil:
+		msg = errorText(list[0].Error, msg)
+	case json.Unmarshal(body, &cf) == nil && len(cf.Errors) > 0 && cf.Errors[0].Message != "":
+		msg = cf.Errors[0].Message
+	}
+	msg = inOrgPattern.ReplaceAllString(msg, "")
+	msg = orgIDPattern.ReplaceAllString(msg, "org_…")
+	msg = accountPathPattern.ReplaceAllString(msg, "/accounts/…")
+	msg = upsellPattern.ReplaceAllString(msg, "")
+	msg = urlPattern.ReplaceAllString(msg, "<url>")
+	msg = strings.Join(strings.Fields(msg), " ")
+	if r := []rune(msg); len(r) > maxProviderMessage {
+		msg = string(r[:maxProviderMessage]) + "…"
+	}
+	return msg
+}
+
+// errorText is the message of a JSON "error" value: a string, or an object with a message.
+func errorText(v any, fallback string) string {
+	switch e := v.(type) {
+	case string:
+		return e
+	case map[string]any:
+		if m, ok := e["message"].(string); ok && m != "" {
+			return m
+		}
+	}
+	return fallback
 }
 
 // transportError describes a provider request that got no response without its URL: a timeout, or the
