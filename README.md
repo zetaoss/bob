@@ -40,7 +40,7 @@ See [`config.example.yaml`](config.example.yaml).
     and `provider_meta.attempted_models` show which model answered.
   - Calls are counted per model for the current quota day (Gemini daily quotas reset at midnight Pacific time). A `429` from a provider
     puts the model in a cooldown taken from the error's `retryDelay` (Gemini) or the `Retry-After` header (Groq), or until the next reset for a daily quota; models in a cooldown are
-    skipped, and if every model in the chain is, the request returns `429` with a `Retry-After` header (seconds) and `retry_after` (time). A daily quota error's `quotaValue` is
+    skipped. If every model in the chain is cooling down, or every attempted model answered `429`, the request returns `429` with a `Retry-After` header (seconds) and `retry_after` (time) when the retry time is known; any other failure returns `502`. A daily quota error's `quotaValue` is
     remembered as the model's daily limit. Gemini has no API for remaining quota, so this is bob's own count, kept in memory and reset
     on restart.
 - `search` holds search API credentials. Each engine is used only when its credentials are set

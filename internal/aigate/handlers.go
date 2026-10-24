@@ -253,11 +253,15 @@ func (g *Gateway) ChatCompletionsHandler(w http.ResponseWriter, r *http.Request)
 	}
 
 	responseBody, resolvedModel, attemptedModels, err := g.callWithFallback(req, modelChain)
-	var cooling *allCoolingDownError
-	if errors.As(err, &cooling) {
-		g.log.Error("chat completion skipped: all models cooling down", "model", req.Model, "until", cooling.until)
-		w.Header().Set("Retry-After", strconv.Itoa(max(int(math.Ceil(cooling.until.Sub(g.usage.now()).Seconds())), 1)))
-		writeJSON(w, http.StatusTooManyRequests, map[string]any{"error": err.Error(), "retry_after": cooling.until})
+	var limited *rateLimitedError
+	if errors.As(err, &limited) {
+		g.log.Error("chat completion rate limited", "model", req.Model, "until", limited.until, "err", err)
+		payload := map[string]any{"error": err.Error()}
+		if !limited.until.IsZero() {
+			w.Header().Set("Retry-After", strconv.Itoa(max(int(math.Ceil(limited.until.Sub(g.usage.now()).Seconds())), 1)))
+			payload["retry_after"] = limited.until
+		}
+		writeJSON(w, http.StatusTooManyRequests, payload)
 		return
 	}
 	if err != nil {
@@ -325,15 +329,19 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 	attempted := make([]string, 0, maxCalls)
 	var lastErr error
 	var earliestRetry time.Time
+	allRateLimited := true
+	noteRetry := func(until time.Time) {
+		if earliestRetry.IsZero() || until.Before(earliestRetry) {
+			earliestRetry = until
+		}
+	}
 
 	for _, modelID := range modelChain {
 		if len(attempted) >= maxCalls {
 			break
 		}
 		if until, cooling := g.usage.coolingDown(modelID); cooling {
-			if earliestRetry.IsZero() || until.Before(earliestRetry) {
-				earliestRetry = until
-			}
+			noteRetry(until)
 			continue
 		}
 		attempted = append(attempted, modelID)
@@ -352,24 +360,43 @@ func (g *Gateway) callWithFallback(req ChatCompletionRequest, modelChain []strin
 		}
 		lastErr = err
 		g.log.Error("model attempt failed", "model", modelID, "err", err)
+		var callErr *providerCallError
+		if !errors.As(err, &callErr) || callErr.StatusCode != http.StatusTooManyRequests {
+			allRateLimited = false
+		} else if until, cooling := g.usage.coolingDown(modelID); cooling {
+			noteRetry(until)
+		}
 	}
 
 	if len(attempted) == 0 {
-		return nil, "", nil, &allCoolingDownError{until: earliestRetry}
+		return nil, "", nil, &rateLimitedError{until: earliestRetry}
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("request failed without provider error")
 	}
-	return nil, "", append([]string(nil), attempted...), fmt.Errorf("attempted models=%s: %w", strings.Join(attempted, ","), lastErr)
+	err := fmt.Errorf("attempted models=%s: %w", strings.Join(attempted, ","), lastErr)
+	if allRateLimited {
+		return nil, "", append([]string(nil), attempted...), &rateLimitedError{until: earliestRetry, err: err}
+	}
+	return nil, "", append([]string(nil), attempted...), err
 }
 
-type allCoolingDownError struct {
+// rateLimitedError means no model could take the request because of rate limits: every model in the chain
+// was cooling down, or every attempted one answered 429. The handler returns 429 so the caller can retry;
+// until is the earliest retry time, zero when the provider gave none.
+type rateLimitedError struct {
 	until time.Time
+	err   error
 }
 
-func (e *allCoolingDownError) Error() string {
+func (e *rateLimitedError) Error() string {
+	if e.err != nil {
+		return e.err.Error()
+	}
 	return fmt.Sprintf("all models are cooling down after quota errors until %s", e.until.Format(time.RFC3339))
 }
+
+func (e *rateLimitedError) Unwrap() error { return e.err }
 
 func addProviderMeta(responseBody []byte, requestedModel string, attemptedModels []string) ([]byte, error) {
 	var payload map[string]any

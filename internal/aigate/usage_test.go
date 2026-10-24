@@ -188,11 +188,11 @@ func TestChatConfiguredModelDoesNotFallBack(t *testing.T) {
 	fake := &fakeGemini{calls: map[string]int{}, fail: map[string]bool{"a": true}}
 	g := newTestGateway(t, fake)
 
-	code, _ := chat(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
-	if code != http.StatusBadGateway || fake.calls["b"] != 0 {
-		t.Fatalf("expected failure without fallback, got %d calls=%v", code, fake.calls)
-	}
 	code, payload, header := chatWithHeader(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
+	if code != http.StatusTooManyRequests || payload["retry_after"] == nil || header.Get("Retry-After") == "" || fake.calls["b"] != 0 {
+		t.Fatalf("expected the provider 429 passed through without fallback, got %d %v %q calls=%v", code, payload, header.Get("Retry-After"), fake.calls)
+	}
+	code, payload, header = chatWithHeader(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
 	if code != http.StatusTooManyRequests || payload["retry_after"] == nil || fake.calls["a"] != 1 {
 		t.Fatalf("expected 429 while cooling down, got %d %v calls=%v", code, payload, fake.calls)
 	}
@@ -267,8 +267,8 @@ func TestGroqReportedQuota(t *testing.T) {
 	mu.Lock()
 	remaining = 0
 	mu.Unlock()
-	if code, _ := chat(t, g, body); code != http.StatusBadGateway {
-		t.Fatalf("expected the 429 to fail the request, got %d", code)
+	if code, _, header := chatWithHeader(t, g, body); code != http.StatusTooManyRequests || header.Get("Retry-After") != "86" {
+		t.Fatalf("expected the provider 429 and its Retry-After passed through, got %d %q", code, header.Get("Retry-After"))
 	}
 	if code, _, header := chatWithHeader(t, g, body); code != http.StatusTooManyRequests || header.Get("Retry-After") != "86" {
 		t.Fatalf("expected a cooldown from Retry-After, got %d %q", code, header.Get("Retry-After"))
@@ -409,5 +409,41 @@ func TestChatMaxFallbacks(t *testing.T) {
 	}
 	if calls["a"] != 1 || calls["b"] != 0 || calls["c"] != 1 || calls["d"] != 1 || calls["e"] != 0 {
 		t.Fatalf("expected one call each to a, c, d, got %v", calls)
+	}
+}
+
+func TestChatRateLimitPassThrough(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Model == "a" {
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = io.WriteString(w, `{"error":{"message":"tokens per minute"}}`)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(ts.Close)
+	old := geminiDefaultEndpoint
+	geminiDefaultEndpoint = ts.URL
+	t.Cleanup(func() { geminiDefaultEndpoint = old })
+	cfg := &config.AIGateConfig{
+		Models:    []string{"gemini/a", "gemini/b"},
+		Providers: map[string]config.ProviderConfig{"gemini": {}},
+		Fallback:  config.FallbackConfig{MaxFallbacks: intPtr(2), PerAttemptTimeout: 5 * time.Second},
+	}
+	g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code, payload, header := chatWithHeader(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
+	if code != http.StatusTooManyRequests || header.Get("Retry-After") != "" || payload["retry_after"] != nil {
+		t.Fatalf("expected 429 without a retry time when the provider gives none, got %d %v %q", code, payload, header.Get("Retry-After"))
+	}
+	if code, _ = chat(t, g, `{"model":"gemini/a","fallback":true,"messages":[{"role":"user","content":"x"}]}`); code != http.StatusBadGateway {
+		t.Fatalf("expected 502 when a model failed for another reason, got %d", code)
 	}
 }
