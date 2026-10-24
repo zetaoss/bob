@@ -481,3 +481,24 @@ func TestChatTransportErrorsHideTheURL(t *testing.T) {
 		})
 	}
 }
+
+func TestProviderMessage(t *testing.T) {
+	for name, c := range map[string]struct{ body, want string }{
+		"groq rate limit": {
+			"{\"error\":{\"message\":\"Rate limit reached for model `openai/gpt-oss-120b` in organization `org_01kq81y58vexzsqray39gbz887` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199857, Requested 972. Please try again in 16m27.984s. Need more tokens? Upgrade to Dev Tier today at https://console.groq.com/settings/billing\",\"type\":\"tokens\",\"code\":\"rate_limit_exceeded\"}}",
+			"Rate limit reached for model `openai/gpt-oss-120b` service tier `on_demand` on tokens per day (TPD): Limit 200000, Used 199857, Requested 972. Please try again in 16m27.984s.",
+		},
+		"gemini list":    {`[{"error":{"code":429,"message":"You exceeded your current quota.","status":"RESOURCE_EXHAUSTED"}}]`, "You exceeded your current quota."},
+		"cloudflare":     {`{"errors":[{"code":7003,"message":"Could not route to /accounts/abc/ai, perhaps your object identifier is invalid?"}],"success":false}`, "Could not route to /accounts/…/ai, perhaps your object identifier is invalid?"},
+		"error string":   {`{"error":"model not found"}`, "model not found"},
+		"plain text":     {"  upstream\n timeout  ", "upstream timeout"},
+		"org id and url": {`{"error":{"message":"denied for org_abc123, see https://example.com/x?org=1"}}`, "denied for org_…, see <url>"},
+	} {
+		if got := providerMessage([]byte(c.body)); got != c.want {
+			t.Errorf("%s: got %q, want %q", name, got, c.want)
+		}
+	}
+	if got := providerMessage([]byte(strings.Repeat("x", 400))); len([]rune(got)) != maxProviderMessage+1 {
+		t.Errorf("expected a long body cut to %d runes, got %d", maxProviderMessage, len([]rune(got)))
+	}
+}
