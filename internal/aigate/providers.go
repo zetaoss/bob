@@ -144,9 +144,12 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 		if errors.Is(err, context.DeadlineExceeded) {
 			timeoutErr = true
 		}
+		// The request URL can hold an account ID (Cloudflare) and ends up in callers' run records, so only
+		// the log keeps it.
+		g.log.Error("provider request failed", "provider", route.Provider, "err", err)
 		return nil, nil, &providerCallError{
 			Timeout: timeoutErr,
-			Err:     fmt.Errorf("provider request failed: %w", err),
+			Err:     transportError(route.Provider, timeout, timeoutErr, err),
 		}
 	}
 	defer resp.Body.Close()
@@ -168,6 +171,19 @@ func (g *Gateway) callProvider(route ModelRoute, request ChatCompletionRequest) 
 	}
 
 	return respBytes, resp.Header, nil
+}
+
+// transportError describes a provider request that got no response without its URL: a timeout, or the
+// cause inside the *url.Error.
+func transportError(provider string, timeout time.Duration, timedOut bool, err error) error {
+	if timedOut {
+		return fmt.Errorf("provider %s timed out after %s", provider, timeout)
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		err = urlErr.Err
+	}
+	return fmt.Errorf("provider %s request failed: %w", provider, err)
 }
 
 func redactAuth(authHeader string) string {

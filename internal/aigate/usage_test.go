@@ -447,3 +447,37 @@ func TestChatRateLimitPassThrough(t *testing.T) {
 		t.Fatalf("expected 502 when a model failed for another reason, got %d", code)
 	}
 }
+
+func TestChatTransportErrorsHideTheURL(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(200 * time.Millisecond)
+	}))
+	t.Cleanup(slow.Close)
+	closed := httptest.NewServer(http.NotFoundHandler())
+	closed.Close()
+
+	for name, c := range map[string]struct{ endpoint, want string }{
+		"timeout": {slow.URL + "/accounts/secret-account", "provider gemini timed out after 50ms"},
+		"refused": {closed.URL + "/accounts/secret-account", "provider gemini request failed: dial tcp"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			old := geminiDefaultEndpoint
+			geminiDefaultEndpoint = c.endpoint
+			t.Cleanup(func() { geminiDefaultEndpoint = old })
+			cfg := &config.AIGateConfig{
+				Models:    []string{"gemini/a"},
+				Providers: map[string]config.ProviderConfig{"gemini": {}},
+				Fallback:  config.FallbackConfig{MaxFallbacks: intPtr(0), PerAttemptTimeout: 50 * time.Millisecond},
+			}
+			g, err := NewGateway(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			code, payload := chat(t, g, `{"model":"gemini/a","messages":[{"role":"user","content":"x"}]}`)
+			msg, _ := payload["error"].(string)
+			if code != http.StatusBadGateway || !strings.Contains(msg, c.want) || strings.Contains(msg, "secret-account") || strings.Contains(msg, "http://") {
+				t.Fatalf("got %d %q", code, msg)
+			}
+		})
+	}
+}
