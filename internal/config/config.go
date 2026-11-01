@@ -268,8 +268,18 @@ func normalizeAIGate(c *AIGateConfig) error {
 		return nil
 	}
 	configured := make(map[string]struct{}, len(c.Models))
-	for _, model := range c.Models {
-		configured[strings.TrimSpace(model)] = struct{}{}
+	for i, model := range c.Models {
+		model = strings.TrimSpace(model)
+		c.Models[i] = model
+		if model != "" {
+			configured[model] = struct{}{}
+		}
+	}
+	for i := range c.AssumeAvailable {
+		c.AssumeAvailable[i] = strings.TrimSpace(c.AssumeAvailable[i])
+	}
+	for i := range c.AssumeUnavailable {
+		c.AssumeUnavailable[i] = strings.TrimSpace(c.AssumeUnavailable[i])
 	}
 	assumed := make(map[string]string, len(c.AssumeAvailable)+len(c.AssumeUnavailable))
 	for _, group := range []struct {
@@ -279,7 +289,6 @@ func normalizeAIGate(c *AIGateConfig) error {
 		{"assumeAvailable", c.AssumeAvailable}, {"assumeUnavailable", c.AssumeUnavailable},
 	} {
 		for _, model := range group.models {
-			model = strings.TrimSpace(model)
 			if _, ok := configured[model]; !ok {
 				return fmt.Errorf("config aigate.%s model %q is not in aigate.models", group.name, model)
 			}

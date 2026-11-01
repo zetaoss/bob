@@ -72,7 +72,10 @@ func (g *Gateway) disableStartupModel(model string, err error) {
 func stringSet(values []string) map[string]struct{} {
 	set := make(map[string]struct{}, len(values))
 	for _, value := range values {
-		set[value] = struct{}{}
+		value = strings.TrimSpace(value)
+		if value != "" {
+			set[value] = struct{}{}
+		}
 	}
 	return set
 }
@@ -83,8 +86,12 @@ func (g *Gateway) probeModel(route ModelRoute) error {
 	if err != nil {
 		return err
 	}
+	normalizedBody, err := normalizeProviderResponse(strings.ToLower(route.Provider), route.UpstreamModel, body)
+	if err != nil {
+		return fmt.Errorf("normalize completion response: %w", err)
+	}
 	var response chatCompletionResponse
-	if err := json.Unmarshal(body, &response); err != nil {
+	if err := json.Unmarshal(normalizedBody, &response); err != nil {
 		return fmt.Errorf("invalid completion response: %w", err)
 	}
 	if len(response.Choices) == 0 {
