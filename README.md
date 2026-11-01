@@ -31,7 +31,7 @@ See [`config.example.yaml`](config.example.yaml).
   - Providers: `cloudflare` (Workers AI, needs `accountId` besides `apiKey`), `gemini`, `groq`, `ollama` (endpoints are fixed in code).
     Model IDs keep their own `/`, as in `groq/openai/gpt-oss-120b` or `cloudflare/@cf/openai/gpt-oss-120b`; Workers AI lists only its
     Text Generation models.
-  - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks every configured model against it.
+  - Each provider's model list is loaded once at startup for `/aigate/v1/models?all`. `validateModelsOnStartup` (default `true`) checks configured models against it and sends a minimal `hi` completion request. Models listed in `assumeAvailable` skip the request and are treated as available; models in `assumeUnavailable` skip it and are excluded from enabled routes and fallback. Unlisted models are checked. Both lists must contain configured model IDs and must not overlap.
   - `fallback.maxFallbacks` (default `2`) is how many other models a request may fall back to after the first model it calls, in one
     pass over the chain; models skipped while cooling down do not count, and `0` disables fallback. `fallback.perAttemptTimeout` (default
     `30s`) is the per-attempt HTTP timeout.
