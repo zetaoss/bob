@@ -43,6 +43,7 @@ type ChatCompletionRequest struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
+	MaxTokens   *int      `json:"max_tokens,omitempty"`
 	// Fallback true lets a request for a configured model fall back to the other models. It is not sent to providers.
 	Fallback bool `json:"fallback,omitempty"`
 }

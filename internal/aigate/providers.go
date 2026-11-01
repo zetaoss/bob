@@ -27,6 +27,7 @@ type openAIRequestBody struct {
 	Model       string    `json:"model"`
 	Messages    []Message `json:"messages,omitempty"`
 	Temperature *float64  `json:"temperature,omitempty"`
+	MaxTokens   *int      `json:"max_tokens,omitempty"`
 }
 
 type chatCompletionResponse struct {
@@ -256,13 +257,23 @@ func redactAuth(authHeader string) string {
 	return "[redacted]"
 }
 
+// defaultCloudflareMaxTokens keeps reasoning models (@cf/openai/gpt-oss-120b, deepseek-r1) from running out
+// of tokens during CoT thought and returning empty content. Workers AI defaults to 256 when omitted.
+const defaultCloudflareMaxTokens = 2048
+
 func buildProviderBody(provider string, request ChatCompletionRequest) any {
+	maxTokens := request.MaxTokens
+	if provider == "cloudflare" && maxTokens == nil {
+		def := defaultCloudflareMaxTokens
+		maxTokens = &def
+	}
 	switch provider {
 	case "gemini":
 		return openAIRequestBody{
 			Model:       request.Model,
 			Messages:    request.Messages,
 			Temperature: request.Temperature,
+			MaxTokens:   maxTokens,
 		}
 	case "ollama":
 		return ollamaRequestBody{
@@ -276,6 +287,7 @@ func buildProviderBody(provider string, request ChatCompletionRequest) any {
 			Model:       request.Model,
 			Messages:    request.Messages,
 			Temperature: request.Temperature,
+			MaxTokens:   maxTokens,
 		}
 	}
 }
