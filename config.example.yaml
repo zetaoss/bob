@@ -17,6 +17,9 @@ aigate:
     - gemini/gemini-2.5-flash
     - groq/openai/gpt-oss-120b
     - ollama/gemma4:31b
+  # These models skip the startup chat-completion check; all others are checked with "hi".
+  assumeAvailable: []
+  assumeUnavailable: []
   providers:
     gemini:
       apiKey: ${GEMINI_API_KEY}

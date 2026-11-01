@@ -33,11 +33,62 @@ func (g *Gateway) LoadAvailableModels(ctx context.Context) {
 }
 
 func (g *Gateway) ValidateStartupModels() error {
-	for publicModel, route := range g.modelRoutes {
+	assumeAvailable := stringSet(g.cfg.AssumeAvailable)
+	assumeUnavailable := stringSet(g.cfg.AssumeUnavailable)
+	for _, publicModel := range slices.Clone(g.modelOrder) {
+		route, ok := g.modelRoutes[publicModel]
+		if !ok {
+			continue
+		}
+		if _, ok := assumeUnavailable[publicModel]; ok {
+			delete(g.modelRoutes, publicModel)
+			g.modelOrder = slices.DeleteFunc(g.modelOrder, func(candidate string) bool { return candidate == publicModel })
+			g.log.Info("startup model validation skipped", "model", publicModel, "availability", "assumed_unavailable")
+			continue
+		}
+		if _, ok := assumeAvailable[publicModel]; ok {
+			g.log.Info("startup model validation skipped", "model", publicModel, "availability", "assumed_available")
+			continue
+		}
 		if err := g.validateModelAvailability(route); err != nil {
-			return fmt.Errorf("startup model validation failed for %q: %w", publicModel, err)
+			g.disableStartupModel(publicModel, err)
+			continue
+		}
+		if err := g.probeModel(route); err != nil {
+			g.disableStartupModel(publicModel, err)
+			continue
 		}
 		g.log.Info("startup model validation passed", "model", publicModel, "provider", route.Provider)
+	}
+	return nil
+}
+
+func (g *Gateway) disableStartupModel(model string, err error) {
+	delete(g.modelRoutes, model)
+	g.modelOrder = slices.DeleteFunc(g.modelOrder, func(candidate string) bool { return candidate == model })
+	g.log.Error("startup model disabled after validation failure", "model", model, "err", err)
+}
+
+func stringSet(values []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(values))
+	for _, value := range values {
+		set[value] = struct{}{}
+	}
+	return set
+}
+
+func (g *Gateway) probeModel(route ModelRoute) error {
+	request := ChatCompletionRequest{Messages: []Message{{Role: "user", Content: "hi"}}}
+	body, _, err := g.callProvider(route, request)
+	if err != nil {
+		return err
+	}
+	var response chatCompletionResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return fmt.Errorf("invalid completion response: %w", err)
+	}
+	if len(response.Choices) == 0 {
+		return fmt.Errorf("completion response has no choices")
 	}
 	return nil
 }

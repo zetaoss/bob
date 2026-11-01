@@ -165,3 +165,52 @@ func TestLoadConfig_MaxFallbacks(t *testing.T) {
 		t.Fatal("expected the removed rounds key to be rejected")
 	}
 }
+
+func TestLoadConfig_AssumeAvailableAndUnavailable(t *testing.T) {
+	validYAML := `
+aigate:
+  models:
+    - gemini/a
+    - gemini/b
+    - gemini/c
+  assumeAvailable:
+    - gemini/a
+  assumeUnavailable:
+    - gemini/b
+  providers:
+    gemini: {apiKey: k}
+`
+	cfg, err := load(t, validYAML)
+	if err != nil {
+		t.Fatalf("unexpected error loading valid assume config: %v", err)
+	}
+	if len(cfg.AIGate.AssumeAvailable) != 1 || cfg.AIGate.AssumeAvailable[0] != "gemini/a" {
+		t.Fatalf("unexpected assumeAvailable: %v", cfg.AIGate.AssumeAvailable)
+	}
+	if len(cfg.AIGate.AssumeUnavailable) != 1 || cfg.AIGate.AssumeUnavailable[0] != "gemini/b" {
+		t.Fatalf("unexpected assumeUnavailable: %v", cfg.AIGate.AssumeUnavailable)
+	}
+
+	unconfiguredYAML := `
+aigate:
+  models: [gemini/a]
+  assumeAvailable: [gemini/unknown]
+  providers:
+    gemini: {apiKey: k}
+`
+	if _, err := load(t, unconfiguredYAML); err == nil {
+		t.Fatal("expected error when model in assumeAvailable is not in models")
+	}
+
+	overlapYAML := `
+aigate:
+  models: [gemini/a]
+  assumeAvailable: [gemini/a]
+  assumeUnavailable: [gemini/a]
+  providers:
+    gemini: {apiKey: k}
+`
+	if _, err := load(t, overlapYAML); err == nil {
+		t.Fatal("expected error when model appears in both assumeAvailable and assumeUnavailable")
+	}
+}

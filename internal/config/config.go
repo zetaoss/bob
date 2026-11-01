@@ -45,6 +45,8 @@ type ServerConfig struct {
 type AIGateConfig struct {
 	ValidateModelsOnStartup *bool                     `yaml:"validateModelsOnStartup,omitempty"`
 	Models                  []string                  `yaml:"models,omitempty"`
+	AssumeAvailable         []string                  `yaml:"assumeAvailable,omitempty"`
+	AssumeUnavailable       []string                  `yaml:"assumeUnavailable,omitempty"`
 	Providers               map[string]ProviderConfig `yaml:"providers,omitempty"`
 	Fallback                FallbackConfig            `yaml:"fallback"`
 }
@@ -264,6 +266,28 @@ func LoadConfig(path string) (*Config, error) {
 func normalizeAIGate(c *AIGateConfig) error {
 	if !c.Enabled() {
 		return nil
+	}
+	configured := make(map[string]struct{}, len(c.Models))
+	for _, model := range c.Models {
+		configured[strings.TrimSpace(model)] = struct{}{}
+	}
+	assumed := make(map[string]string, len(c.AssumeAvailable)+len(c.AssumeUnavailable))
+	for _, group := range []struct {
+		name   string
+		models []string
+	}{
+		{"assumeAvailable", c.AssumeAvailable}, {"assumeUnavailable", c.AssumeUnavailable},
+	} {
+		for _, model := range group.models {
+			model = strings.TrimSpace(model)
+			if _, ok := configured[model]; !ok {
+				return fmt.Errorf("config aigate.%s model %q is not in aigate.models", group.name, model)
+			}
+			if previous, ok := assumed[model]; ok {
+				return fmt.Errorf("config aigate model %q appears in both %s and %s", model, previous, group.name)
+			}
+			assumed[model] = group.name
+		}
 	}
 	if len(c.Providers) == 0 {
 		return fmt.Errorf("config aigate must define at least one provider")
