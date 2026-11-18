@@ -17,10 +17,15 @@ import (
 )
 
 type ollamaRequestBody struct {
-	Model       string    `json:"model"`
-	Messages    []Message `json:"messages,omitempty"`
-	Temperature *float64  `json:"temperature,omitempty"`
-	Stream      bool      `json:"stream"`
+	Model    string         `json:"model"`
+	Messages []Message      `json:"messages,omitempty"`
+	Options  *ollamaOptions `json:"options,omitempty"`
+	Stream   bool           `json:"stream"`
+}
+
+type ollamaOptions struct {
+	Temperature *float64 `json:"temperature,omitempty"`
+	NumPredict  *int     `json:"num_predict,omitempty"`
 }
 
 type openAIRequestBody struct {
@@ -276,11 +281,15 @@ func buildProviderBody(provider string, request ChatCompletionRequest) any {
 			MaxTokens:   maxTokens,
 		}
 	case "ollama":
+		var options *ollamaOptions
+		if request.Temperature != nil || request.MaxTokens != nil {
+			options = &ollamaOptions{Temperature: request.Temperature, NumPredict: request.MaxTokens}
+		}
 		return ollamaRequestBody{
-			Model:       request.Model,
-			Messages:    request.Messages,
-			Temperature: request.Temperature,
-			Stream:      false,
+			Model:    request.Model,
+			Messages: request.Messages,
+			Options:  options,
+			Stream:   false,
 		}
 	default:
 		return openAIRequestBody{

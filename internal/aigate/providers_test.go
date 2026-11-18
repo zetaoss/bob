@@ -2,9 +2,64 @@ package aigate
 
 import (
 	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 )
+
+func TestOllamaRequestOptions(t *testing.T) {
+	zero, limit := 0.0, 512
+	cases := []struct {
+		name        string
+		temperature *float64
+		maxTokens   *int
+		want        map[string]any
+	}{
+		{"omitted", nil, nil, nil},
+		{"zero temperature", &zero, nil, map[string]any{"temperature": float64(0)}},
+		{"max tokens", nil, &limit, map[string]any{"num_predict": float64(512)}},
+		{"both", &zero, &limit, map[string]any{"temperature": float64(0), "num_predict": float64(512)}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body, err := json.Marshal(buildProviderBody("ollama", ChatCompletionRequest{Model: "test", Temperature: tc.temperature, MaxTokens: tc.maxTokens}))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(body, &got); err != nil {
+				t.Fatal(err)
+			}
+			if _, ok := got["temperature"]; ok {
+				t.Fatalf("unexpected top-level temperature: %s", body)
+			}
+			if _, ok := got["max_tokens"]; ok {
+				t.Fatalf("unexpected top-level max_tokens: %s", body)
+			}
+			if tc.want == nil {
+				if _, ok := got["options"]; ok {
+					t.Fatalf("unexpected options: %s", body)
+				}
+			} else if !reflect.DeepEqual(got["options"], tc.want) {
+				t.Fatalf("options = %v, want %v", got["options"], tc.want)
+			}
+		})
+	}
+}
+
+func TestNormalizeOllamaResponse(t *testing.T) {
+	body, err := normalizeProviderResponse("ollama", "ollama/test", []byte(`{"message":{"role":"assistant","content":"hello"},"done_reason":"stop","eval_count":12}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got chatCompletionResponse
+	if err := json.Unmarshal(body, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Model != "ollama/test" || len(got.Choices) != 1 || got.Choices[0].Message.Content != "hello" || got.Choices[0].FinishReason != "stop" || got.Usage["completion_tokens"] != float64(12) {
+		t.Fatalf("unexpected response: %s", body)
+	}
+}
 
 func TestBuildProviderBodyMaxTokens(t *testing.T) {
 	req := ChatCompletionRequest{
